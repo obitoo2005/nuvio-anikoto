@@ -512,60 +512,20 @@ async function decryptEnc(encStr) {
     return null;
   }
 }
-async function parseMasterVariants(masterUrl, headers) {
-  try {
-    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timeoutId = controller ? setTimeout(() => controller.abort(), 2e3) : null;
-    const res = await fetch(masterUrl, {
-      headers,
-      signal: controller?.signal
-    });
-    if (timeoutId) clearTimeout(timeoutId);
-    if (!res.ok) return [];
-    const text = await res.text();
-    const lines = text.split("\n");
-    const variants = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.startsWith("#EXT-X-STREAM-INF:") && !line.includes("I-FRAME")) {
-        let quality = "1080p";
-        const nameMatch = line.match(/NAME="([^"]+)"/i);
-        const resMatch = line.match(/RESOLUTION=(\d+x(\d+))/i);
-        if (nameMatch && nameMatch[1]) {
-          quality = nameMatch[1].trim();
-        } else if (resMatch && resMatch[2]) {
-          quality = `${resMatch[2]}p`;
-        }
-        const nextLine = lines[i + 1]?.trim();
-        if (nextLine && !nextLine.startsWith("#")) {
-          const variantUrl = new URL(nextLine, masterUrl).href;
-          if (!seen.has(quality)) {
-            seen.add(quality);
-            variants.push({ quality, url: variantUrl });
-          }
-        }
-      }
-    }
-    return variants;
-  } catch {
-    return [];
-  }
-}
-async function resolveStreamsFromServer(server) {
+async function resolveStreamFromServer(server) {
   try {
     const playerUrl = await getServerPlayerUrl(server.linkId);
-    if (!playerUrl) return [];
+    if (!playerUrl) return null;
     const playerRes = await fetch(playerUrl, {
       headers: {
         "User-Agent": UA3,
         "Referer": "https://anikoto.cz/"
       }
     });
-    if (!playerRes.ok) return [];
+    if (!playerRes.ok) return null;
     const playerHtml = await playerRes.text();
     const dataIdMatch = playerHtml.match(/data-id="(\d+)"/);
-    if (!dataIdMatch) return [];
+    if (!dataIdMatch) return null;
     const playerStreamId = dataIdMatch[1];
     const parsed = new URL(playerUrl);
     const playerOrigin = parsed.origin;
@@ -578,14 +538,14 @@ async function resolveStreamsFromServer(server) {
         "X-Requested-With": "XMLHttpRequest"
       }
     });
-    if (!gsRes.ok) return [];
+    if (!gsRes.ok) return null;
     const gsJson = await gsRes.json();
     let masterFile = gsJson?.sources?.file;
     if (!masterFile && gsJson?.enc) {
       const dec = await decryptEnc(gsJson.enc);
       masterFile = dec?.file;
     }
-    if (!masterFile || typeof masterFile !== "string") return [];
+    if (!masterFile || typeof masterFile !== "string") return null;
     if (masterFile.includes("fetch.nexabloom.top")) {
       masterFile = masterFile.replace("fetch.nexabloom.top", "ncdn.imgnex.top");
     }
@@ -597,61 +557,22 @@ async function resolveStreamsFromServer(server) {
     const isDub = server.type === "dub";
     const langLabel = isDub ? "Dub" : "Sub";
     const langCode = isDub ? "en" : "ja";
-    const headers = {
-      "Referer": `${playerOrigin}/`,
-      "Origin": playerOrigin
+    const cleanTitle2 = `Anikoto - ${server.serverName} (${langLabel})`;
+    return {
+      title: cleanTitle2,
+      name: "Anikoto",
+      url: masterFile,
+      quality: "1080p",
+      language: langCode,
+      type: "hls",
+      headers: {
+        "Referer": `${playerOrigin}/`,
+        "Origin": playerOrigin
+      },
+      subtitles: subtitles.length > 0 ? subtitles : void 0
     };
-    const variants = await parseMasterVariants(masterFile, headers);
-    const results = [];
-    if (variants.length > 0) {
-      for (const v of variants) {
-        results.push({
-          title: `Anikoto - ${server.serverName} (${langLabel}) [${v.quality} Direct]`,
-          name: "Anikoto",
-          url: v.url,
-          quality: v.quality,
-          language: langCode,
-          type: "hls",
-          headers,
-          subtitles: subtitles.length > 0 ? subtitles : void 0
-        });
-      }
-      results.push({
-        title: `Anikoto - ${server.serverName} (${langLabel}) [Auto Adaptive]`,
-        name: "Anikoto",
-        url: masterFile,
-        quality: "Auto",
-        language: langCode,
-        type: "hls",
-        headers,
-        subtitles: subtitles.length > 0 ? subtitles : void 0
-      });
-    } else {
-      const direct1080 = masterFile.replace("master.m3u8", "index-f1-v1-a1.m3u8");
-      results.push({
-        title: `Anikoto - ${server.serverName} (${langLabel}) [1080p Direct]`,
-        name: "Anikoto",
-        url: direct1080,
-        quality: "1080p",
-        language: langCode,
-        type: "hls",
-        headers,
-        subtitles: subtitles.length > 0 ? subtitles : void 0
-      });
-      results.push({
-        title: `Anikoto - ${server.serverName} (${langLabel}) [Auto Adaptive]`,
-        name: "Anikoto",
-        url: masterFile,
-        quality: "Auto",
-        language: langCode,
-        type: "hls",
-        headers,
-        subtitles: subtitles.length > 0 ? subtitles : void 0
-      });
-    }
-    return results;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -693,12 +614,18 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
     if (!episodes || episodes.length === 0) return [];
     const matchedEp = resolveTargetEpisode(episodes, targetEpisode, meta.absoluteOffset);
     if (!matchedEp || !matchedEp.dataIds) return [];
-    const servers = await getServerList(matchedEp.dataIds);
-    if (!servers || servers.length === 0) return [];
-    const streamPromises = servers.map((s) => resolveStreamsFromServer(s));
-    const resolvedArrays = await Promise.all(streamPromises);
-    const flattened = resolvedArrays.flat();
-    const streams = flattened.filter((s) => Boolean(s && s.url));
+    const rawServers = await getServerList(matchedEp.dataIds);
+    if (!rawServers || rawServers.length === 0) return [];
+    const servers = rawServers.slice().sort((a, b) => {
+      const aIsHd = a.serverName.toLowerCase().includes("hd");
+      const bIsHd = b.serverName.toLowerCase().includes("hd");
+      if (aIsHd && !bIsHd) return -1;
+      if (!aIsHd && bIsHd) return 1;
+      return 0;
+    });
+    const streamPromises = servers.map((s) => resolveStreamFromServer(s));
+    const resolved = await Promise.all(streamPromises);
+    const streams = resolved.filter((s) => Boolean(s && s.url));
     return streams;
   } catch {
     return [];
