@@ -105,12 +105,12 @@ export async function resolveStreamFromServer(
     const langLabel = isDub ? "Dub" : "Sub";
     const langCode = isDub ? "en" : "ja";
 
-    // Clean, readable title that won't get truncated on mobile or TV screens
-    const cleanTitle = `Anikoto - ${server.serverName} (${langLabel})`;
+    // Distinct name so Nuvio cards show "HD-1 • Sub" and "Vidstream-2 • Sub"
+    const displayName = `${server.serverName} • ${langLabel}`;
 
     return {
-      title: cleanTitle,
-      name: "Anikoto",
+      title: `Anikoto - ${displayName}`,
+      name: displayName,
       url: masterFile,
       quality: "1080p",
       language: langCode,

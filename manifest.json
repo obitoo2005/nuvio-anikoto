@@ -1,6 +1,6 @@
 {
   "name": "Anikoto",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Watch anime series and movies with English Sub and Dub from Anikoto.cz",
   "author": "obitoo2005",
   "scrapers": [
@@ -8,7 +8,7 @@
       "id": "anikoto",
       "name": "Anikoto.cz",
       "description": "Stream HD anime episodes with English Sub & Dub, subtitles, and multi-server redundancy from Anikoto.cz",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "filename": "providers/anikoto.js",
       "supportedTypes": ["tv", "movie", "anime", "series"],
       "enabled": true,

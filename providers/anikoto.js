@@ -557,10 +557,10 @@ async function resolveStreamFromServer(server) {
     const isDub = server.type === "dub";
     const langLabel = isDub ? "Dub" : "Sub";
     const langCode = isDub ? "en" : "ja";
-    const cleanTitle2 = `Anikoto - ${server.serverName} (${langLabel})`;
+    const displayName = `${server.serverName} \u2022 ${langLabel}`;
     return {
-      title: cleanTitle2,
-      name: "Anikoto",
+      title: `Anikoto - ${displayName}`,
+      name: displayName,
       url: masterFile,
       quality: "1080p",
       language: langCode,
