@@ -93,7 +93,7 @@ Nuvio PluginRuntimeResult Array (HLS master.m3u8, headers, subtitles, 1080p)
 3. Click **Add Plugin Repository** (or **Install from URL**).
 4. Enter the direct raw URL to `manifest.json`, for example:
    ```
-   https://raw.githubusercontent.com/<username>/<repo>/main/manifest.json
+   https://raw.githubusercontent.com/obitoo2005/nuvio-anikoto/main/manifest.json
    ```
 5. Nuvio will download `manifest.json` and fetch `providers/anikoto.js`. Anikoto will now be available as an active stream provider.
 

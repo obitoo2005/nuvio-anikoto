@@ -2,7 +2,7 @@
   "name": "Anikoto",
   "version": "1.0.0",
   "description": "Watch anime series and movies with English Sub and Dub from Anikoto.cz",
-  "author": "Nuvio Community",
+  "author": "obitoo2005",
   "scrapers": [
     {
       "id": "anikoto",

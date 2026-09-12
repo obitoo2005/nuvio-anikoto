@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "description": "Production-quality Nuvio provider plugin for Anikoto.cz",
   "main": "providers/anikoto.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/obitoo2005/nuvio-anikoto.git"
+  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=neutral --target=es2020 --format=cjs --outfile=providers/anikoto.js",
     "test": "node tests/test_all.js"
   },
   "keywords": ["nuvio", "nuvio-plugin", "anikoto", "anime", "streaming"],
-  "author": "Nuvio Community",
+  "author": "obitoo2005",
   "license": "MIT",
   "devDependencies": {
     "esbuild": "^0.25.0",
