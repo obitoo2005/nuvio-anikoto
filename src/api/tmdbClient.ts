@@ -12,6 +12,55 @@ export async function getTmdbMetadata(
   let kind: "tv" | "movie" = mediaType === "movie" ? "movie" : "tv";
   let numericId: string | number = tmdbId;
 
+  // If Kitsu ID provided (e.g. kitsu:46474 or kitsu/46474)
+  if (String(tmdbId).startsWith("kitsu:") || String(tmdbId).startsWith("kitsu/")) {
+    try {
+      const kitsuId = String(tmdbId).replace(/^kitsu[:/]/, "");
+      const kRes = await fetch(`https://kitsu.io/api/edge/anime/${kitsuId}`, {
+        headers: { "Accept": "application/vnd.api+json", "User-Agent": UA }
+      });
+      if (kRes.ok) {
+        const kData = await kRes.json();
+        const attr = kData.data?.attributes;
+        const mainTitle = attr?.canonicalTitle || attr?.titles?.en || attr?.titles?.en_jp;
+        const origTitle = attr?.titles?.ja_jp || attr?.titles?.en_jp;
+        const altList: string[] = Object.values(attr?.titles || {})
+          .concat(attr?.abbreviatedTitles || [])
+          .filter((t): t is string => Boolean(t && typeof t === "string"));
+
+        if (mainTitle) {
+          try {
+            const sRes = await fetch(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
+              headers: { "User-Agent": UA }
+            });
+            if (sRes.ok) {
+              const sData = await sRes.json();
+              if (sData.results && sData.results.length > 0) {
+                const tmdbIdFound = sData.results[0].id;
+                const tmdbMeta = await getTmdbMetadata(String(tmdbIdFound), kind, season);
+                if (tmdbMeta) {
+                  return {
+                    ...tmdbMeta,
+                    alternateTitles: [...new Set([...tmdbMeta.alternateTitles, ...altList])]
+                  };
+                }
+              }
+            }
+          } catch {}
+
+          return {
+            numericId: kitsuId,
+            kind,
+            title: decodeHtmlEntities(mainTitle),
+            originalTitle: origTitle ? decodeHtmlEntities(origTitle) : undefined,
+            alternateTitles: altList.map(t => decodeHtmlEntities(t)),
+            absoluteOffset: 0
+          };
+        }
+      }
+    } catch {}
+  }
+
   // If IMDB ID provided (e.g. tt1234567), resolve via TMDB find API
   if (String(tmdbId).startsWith("tt")) {
     try {

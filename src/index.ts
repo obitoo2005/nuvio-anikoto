@@ -18,21 +18,27 @@ export async function getStreams(
     const targetSeason = typeof season === "number" ? season : (mediaType === "movie" ? 1 : 1);
     const targetEpisode = typeof episode === "number" ? episode : 1;
 
-    // 1. Fetch TMDB metadata
+    // 1. Fetch TMDB / Kitsu / IMDB metadata
     const meta = await getTmdbMetadata(String(tmdbId), mediaType, targetSeason);
     if (!meta || !meta.title) {
       return [];
     }
 
     // 2. Search Anikoto for candidates using all available titles
+    const extraSubqueries: string[] = [];
+    if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
+    if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
+    if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+
     const searchQueries = [
       meta.title,
       meta.originalTitle,
+      ...extraSubqueries,
       ...(meta.alternateTitles || [])
     ].filter((t): t is string => Boolean(t && t.trim()));
 
     let candidates = [];
-    for (const q of searchQueries.slice(0, 5)) {
+    for (const q of searchQueries.slice(0, 8)) {
       candidates = await searchAnikoto(q);
       if (candidates.length > 0) break;
     }
