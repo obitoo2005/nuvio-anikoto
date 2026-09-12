@@ -15,36 +15,45 @@ export function scoreTitleMatch(
   if (!tNorm) return 0;
 
   // 1. Direct exact match check
-  if (cNorm === tNorm || jNorm === tNorm) {
-    return 1.0;
-  }
-
-  // 2. Substring containment with length penalty
   let score = 0;
-  for (const cand of [cNorm, jNorm]) {
-    if (!cand) continue;
-    if (cand === tNorm) {
-      score = Math.max(score, 1.0);
-      continue;
-    }
-    if (cand.startsWith(tNorm) || tNorm.startsWith(cand)) {
-      const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-      score = Math.max(score, 0.8 * ratio);
-    } else if (cand.includes(tNorm) || tNorm.includes(cand)) {
-      const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-      score = Math.max(score, 0.65 * ratio);
-    } else {
-      score = Math.max(score, computeDiceScore(cand, tNorm));
+  if (cNorm === tNorm || jNorm === tNorm) {
+    score = 1.0;
+  } else {
+    for (const cand of [cNorm, jNorm]) {
+      if (!cand) continue;
+      if (cand === tNorm) {
+        score = Math.max(score, 1.0);
+        continue;
+      }
+      if (cand.startsWith(tNorm) || tNorm.startsWith(cand)) {
+        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
+        score = Math.max(score, 0.8 * ratio);
+      } else if (cand.includes(tNorm) || tNorm.includes(cand)) {
+        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
+        score = Math.max(score, 0.65 * ratio);
+      } else {
+        score = Math.max(score, computeDiceScore(cand, tNorm));
+      }
     }
   }
 
-  // 3. Season alignment boost or penalty
-  if (targetSeason && targetSeason > 1) {
-    const candSeason = extractSeasonNumber(candidateTitle) || (candidateJp ? extractSeasonNumber(candidateJp) : null);
-    if (candSeason === targetSeason) {
-      score += 0.35;
-    } else if (candSeason !== null && candSeason !== targetSeason) {
-      score -= 0.4;
+  // 2. Strict season alignment penalty and boost
+  const candSeason = extractSeasonNumber(candidateTitle) || (candidateJp ? extractSeasonNumber(candidateJp) : null);
+  const effectiveSeason = (typeof targetSeason === "number" && targetSeason > 0) ? targetSeason : 1;
+
+  if (effectiveSeason === 1) {
+    // When Season 1 is requested, penalize any candidate that explicitly specifies Season 2+
+    if (candSeason !== null && candSeason > 1) {
+      score -= 0.6;
+    } else if (candSeason === null) {
+      score += 0.2;
+    }
+  } else {
+    // When Season 2+ is requested, boost the matching season and heavily penalize mismatches
+    if (candSeason === effectiveSeason) {
+      score += 0.4;
+    } else if (candSeason !== null && candSeason !== effectiveSeason) {
+      score -= 0.6;
     }
   }
 

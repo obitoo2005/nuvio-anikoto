@@ -1,5 +1,5 @@
 import { TMDBMetadata } from "../types";
-import { decodeHtmlEntities } from "../utils/textUtils";
+import { decodeHtmlEntities, extractSeasonNumber } from "../utils/textUtils";
 
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -54,9 +54,9 @@ export async function getTmdbMetadata(
   let kind: "tv" | "movie" = mediaType === "movie" ? "movie" : "tv";
   const parsed = parseIncomingId(rawId, season, episode);
   const cleanId = parsed.cleanId;
-  const targetSeason = parsed.season;
+  let targetSeason = parsed.season;
 
-  // 1. If Kitsu ID provided (e.g. kitsu:12:1 or kitsu:12)
+  // 1. If Kitsu ID provided (e.g. kitsu:12:1 or kitsu:8671)
   if (parsed.isKitsu) {
     try {
       const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
@@ -72,6 +72,12 @@ export async function getTmdbMetadata(
           .filter((t): t is string => Boolean(t && typeof t === "string"));
 
         if (mainTitle) {
+          // If Kitsu title explicitly indicates a season, respect it
+          const titleSeason = extractSeasonNumber(mainTitle) || (origTitle ? extractSeasonNumber(origTitle) : null);
+          if (titleSeason && titleSeason > 1) {
+            targetSeason = titleSeason;
+          }
+
           try {
             const sRes = await fetch(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
               headers: { "User-Agent": UA }
@@ -84,7 +90,9 @@ export async function getTmdbMetadata(
                 if (tmdbMeta) {
                   return {
                     ...tmdbMeta,
-                    alternateTitles: [...new Set([...tmdbMeta.alternateTitles, ...altList])]
+                    // Keep Kitsu mainTitle as primary title for exact season searching on Anikoto
+                    title: decodeHtmlEntities(mainTitle),
+                    alternateTitles: [...new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])]
                   };
                 }
               }

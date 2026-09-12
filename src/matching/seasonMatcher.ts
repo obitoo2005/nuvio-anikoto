@@ -7,22 +7,25 @@ export async function resolveTargetSeasonAnimeId(
   seasonNumber?: number,
   seasonName?: string
 ): Promise<string> {
-  if (!seasonNumber || seasonNumber <= 1) {
-    return baseAnimeId;
-  }
+  const targetSeason = (typeof seasonNumber === "number" && seasonNumber > 0) ? seasonNumber : 1;
 
   const seasons = await getAnimeSeasons(baseAnimeId);
   if (!seasons || seasons.length === 0) {
     return baseAnimeId;
   }
 
-  // 1. Try matching by season number in season.name
+  // 1. Try matching by season number in season.name (e.g. "Season 1", "Season 2", "Season 3")
   let matched = seasons.find(s => {
     const sNum = extractSeasonNumber(s.name);
-    return sNum === seasonNumber;
+    return sNum === targetSeason;
   });
 
-  // 2. Try matching by seasonName if provided by TMDB
+  // 2. If targetSeason is 1 and no explicit season number match, match "Season 1" or unnumbered entry
+  if (!matched && targetSeason === 1) {
+    matched = seasons.find(s => /\bseason\s*0*1\b/i.test(s.name) || extractSeasonNumber(s.name) === null);
+  }
+
+  // 3. Try matching by seasonName if provided by TMDB (e.g. "Entertainment District Arc")
   if (!matched && seasonName) {
     const cleanTarg = cleanTitle(seasonName);
     matched = seasons.find(s => {
@@ -32,6 +35,11 @@ export async function resolveTargetSeasonAnimeId(
   }
 
   if (!matched) {
+    return baseAnimeId;
+  }
+
+  // If the matched season is already the active season on this page, keep baseAnimeId
+  if (matched.active) {
     return baseAnimeId;
   }
 
@@ -47,7 +55,7 @@ export function resolveTargetEpisode(
 ): AnikotoEpisodeItem | null {
   if (!episodes || episodes.length === 0) return null;
 
-  const targetNum = (episodeNumber && episodeNumber > 0) ? episodeNumber : 1;
+  const targetNum = (typeof episodeNumber === "number" && episodeNumber > 0) ? episodeNumber : 1;
 
   // 1. Match directly by episode number
   let ep = episodes.find(e => e.num === targetNum);

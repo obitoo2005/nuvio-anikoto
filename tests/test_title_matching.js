@@ -17,7 +17,7 @@ function testTitleMatchingUnit() {
 
   // 3. Exact matching scores
   const scoreExact = scoreTitleMatch("Bleach", "", "Bleach", 1);
-  assert.strictEqual(scoreExact, 1.0, "Exact match must have score 1.0");
+  assert(scoreExact >= 1.0, "Exact match must have score >= 1.0");
 
   // 4. Candidate selection
   const candidates = [
