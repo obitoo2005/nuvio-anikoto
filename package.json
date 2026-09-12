@@ -1,6 +1,6 @@
 {
   "name": "nuvio-provider-anikoto",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Production-quality Nuvio provider plugin for Anikoto.cz",
   "main": "providers/anikoto.js",
   "repository": {

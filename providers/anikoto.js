@@ -473,6 +473,45 @@ function resolveTargetEpisode(episodes, episodeNumber, absoluteOffset = 0) {
 
 // src/extractors/streamExtractor.ts
 var UA3 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var U = "i?LMTAx0Q6,:}50U";
+var S = "W0;27ToaUpl_P%'c";
+function W(str, len) {
+  const encText = new TextEncoder().encode(String(str));
+  const arr = new Uint8Array(len);
+  arr.set(encText.subarray(0, Math.min(len, encText.length)));
+  return arr;
+}
+function b64ToUint8(str) {
+  let b64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4) b64 += "=";
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+async function decryptEnc(encStr) {
+  try {
+    const keyBytes = W(U, 32);
+    const ivBytes = W(S, 16);
+    const cipherBytes = b64ToUint8(encStr);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyBytes,
+      { name: "AES-CBC" },
+      false,
+      ["decrypt"]
+    );
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-CBC", iv: ivBytes },
+      key,
+      cipherBytes
+    );
+    const text = new TextDecoder().decode(decrypted);
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 async function resolveStreamFromServer(server) {
   try {
     const playerUrl = await getServerPlayerUrl(server.linkId);
@@ -488,9 +527,11 @@ async function resolveStreamFromServer(server) {
     const dataIdMatch = playerHtml.match(/data-id="(\d+)"/);
     if (!dataIdMatch) return null;
     const playerStreamId = dataIdMatch[1];
-    const playerOrigin = new URL(playerUrl).origin;
-    const getSourcesUrl = `${playerOrigin}/stream/getSourcesNew?id=${playerStreamId}`;
-    const gsRes = await fetch(getSourcesUrl, {
+    const parsed = new URL(playerUrl);
+    const playerOrigin = parsed.origin;
+    const sParam = parsed.searchParams.get("s") || "tcdn";
+    const gsUrl = `${playerOrigin}/stream/getSourcesNew?id=${playerStreamId}&s=${encodeURIComponent(sParam)}`;
+    const gsRes = await fetch(gsUrl, {
       headers: {
         "User-Agent": UA3,
         "Referer": playerUrl,
@@ -499,8 +540,15 @@ async function resolveStreamFromServer(server) {
     });
     if (!gsRes.ok) return null;
     const gsJson = await gsRes.json();
-    const file = gsJson?.sources?.file;
+    let file = gsJson?.sources?.file;
+    if (!file && gsJson?.enc) {
+      const dec = await decryptEnc(gsJson.enc);
+      file = dec?.file;
+    }
     if (!file || typeof file !== "string") return null;
+    if (file.includes("fetch.nexabloom.top")) {
+      file = file.replace("fetch.nexabloom.top", "ncdn.imgnex.top");
+    }
     const subtitles = (gsJson.tracks || []).filter((t) => Boolean(t.file)).map((t) => ({
       url: t.file,
       language: t.label || "Unknown",
