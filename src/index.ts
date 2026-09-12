@@ -3,7 +3,7 @@ import { getTmdbMetadata, parseIncomingId } from "./api/tmdbClient";
 import { searchAnikoto, getEpisodeList, getServerList } from "./api/anikotoClient";
 import { findBestAnimeMatch, scoreTitleMatch } from "./matching/titleMatcher";
 import { resolveTargetSeasonAnimeId, resolveTargetEpisode } from "./matching/seasonMatcher";
-import { resolveStreamFromServer } from "./extractors/streamExtractor";
+import { resolveStreamsFromServer } from "./extractors/streamExtractor";
 import { cleanTitle, extractSeasonNumber } from "./utils/textUtils";
 
 export async function getStreams(
@@ -70,11 +70,12 @@ export async function getStreams(
     if (!servers || servers.length === 0) return [];
 
     // 8. Resolve playable streams concurrently for all available servers
-    const streamPromises = servers.map(s => resolveStreamFromServer(s));
-    const resolved = await Promise.all(streamPromises);
+    const streamPromises = servers.map(s => resolveStreamsFromServer(s));
+    const resolvedArrays = await Promise.all(streamPromises);
+    const flattened = resolvedArrays.flat();
 
     // Filter out failed resolutions
-    const streams = resolved.filter((s): s is PluginRuntimeResult => Boolean(s && s.url));
+    const streams = flattened.filter((s): s is PluginRuntimeResult => Boolean(s && s.url));
     return streams;
   } catch {
     return [];
