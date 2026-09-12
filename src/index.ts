@@ -1,5 +1,5 @@
 import { PluginRuntimeResult } from "./types";
-import { getTmdbMetadata } from "./api/tmdbClient";
+import { getTmdbMetadata, parseIncomingId } from "./api/tmdbClient";
 import { searchAnikoto, getEpisodeList, getServerList } from "./api/anikotoClient";
 import { findBestAnimeMatch, scoreTitleMatch } from "./matching/titleMatcher";
 import { resolveTargetSeasonAnimeId, resolveTargetEpisode } from "./matching/seasonMatcher";
@@ -15,11 +15,13 @@ export async function getStreams(
   try {
     if (!tmdbId) return [];
 
-    const targetSeason = typeof season === "number" ? season : (mediaType === "movie" ? 1 : 1);
-    const targetEpisode = typeof episode === "number" ? episode : 1;
+    // Extract clean ID, season, and episode from incoming ID (handles kitsu:12:1, tt123:1:1, etc.)
+    const idInfo = parseIncomingId(tmdbId, season, episode);
+    const targetSeason = idInfo.season;
+    const targetEpisode = idInfo.episode;
 
     // 1. Fetch TMDB / Kitsu / IMDB metadata
-    const meta = await getTmdbMetadata(String(tmdbId), mediaType, targetSeason);
+    const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
     if (!meta || !meta.title) {
       return [];
     }

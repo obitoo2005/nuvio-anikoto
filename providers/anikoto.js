@@ -65,13 +65,40 @@ function extractSeasonNumber(title) {
 // src/api/tmdbClient.ts
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-async function getTmdbMetadata(tmdbId, mediaType, season) {
+function parseIncomingId(rawId, season, episode) {
+  let s = typeof season === "number" && !isNaN(season) ? season : void 0;
+  let e = typeof episode === "number" && !isNaN(episode) ? episode : void 0;
+  const raw = String(rawId || "").trim();
+  const isKitsu = raw.startsWith("kitsu:") || raw.startsWith("kitsu/");
+  const stripped = raw.replace(/^kitsu[:/]/, "").replace(/^tmdb[:/]/, "");
+  const parts = stripped.split(":");
+  const cleanId = parts[0].split("/")[0].trim();
+  if (parts.length >= 3) {
+    if (s === void 0) s = parseInt(parts[1], 10);
+    if (e === void 0) e = parseInt(parts[2], 10);
+  } else if (parts.length === 2) {
+    if (isKitsu) {
+      if (e === void 0) e = parseInt(parts[1], 10);
+      if (s === void 0) s = 1;
+    } else {
+      if (e === void 0) e = parseInt(parts[1], 10);
+    }
+  }
+  return {
+    cleanId,
+    isKitsu,
+    season: typeof s === "number" && !isNaN(s) ? s : 1,
+    episode: typeof e === "number" && !isNaN(e) ? e : 1
+  };
+}
+async function getTmdbMetadata(rawId, mediaType, season, episode) {
   let kind = mediaType === "movie" ? "movie" : "tv";
-  let numericId = tmdbId;
-  if (String(tmdbId).startsWith("kitsu:") || String(tmdbId).startsWith("kitsu/")) {
+  const parsed = parseIncomingId(rawId, season, episode);
+  const cleanId = parsed.cleanId;
+  const targetSeason = parsed.season;
+  if (parsed.isKitsu) {
     try {
-      const kitsuId = String(tmdbId).replace(/^kitsu[:/]/, "");
-      const kRes = await fetch(`https://kitsu.io/api/edge/anime/${kitsuId}`, {
+      const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
         headers: { "Accept": "application/vnd.api+json", "User-Agent": UA }
       });
       if (kRes.ok) {
@@ -89,7 +116,7 @@ async function getTmdbMetadata(tmdbId, mediaType, season) {
               const sData = await sRes.json();
               if (sData.results && sData.results.length > 0) {
                 const tmdbIdFound = sData.results[0].id;
-                const tmdbMeta = await getTmdbMetadata(String(tmdbIdFound), kind, season);
+                const tmdbMeta = await getTmdbMetadata(String(tmdbIdFound), kind, targetSeason);
                 if (tmdbMeta) {
                   return {
                     ...tmdbMeta,
@@ -101,7 +128,7 @@ async function getTmdbMetadata(tmdbId, mediaType, season) {
           } catch {
           }
           return {
-            numericId: kitsuId,
+            numericId: cleanId,
             kind,
             title: decodeHtmlEntities(mainTitle),
             originalTitle: origTitle ? decodeHtmlEntities(origTitle) : void 0,
@@ -113,9 +140,10 @@ async function getTmdbMetadata(tmdbId, mediaType, season) {
     } catch {
     }
   }
-  if (String(tmdbId).startsWith("tt")) {
+  let numericId = cleanId;
+  if (cleanId.startsWith("tt")) {
     try {
-      const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(tmdbId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
+      const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(cleanId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
       const res = await fetch(findUrl, { headers: { "User-Agent": UA } });
       if (res.ok) {
         const data = await res.json();
@@ -144,12 +172,12 @@ async function getTmdbMetadata(tmdbId, mediaType, season) {
       );
       let absoluteOffset = 0;
       let seasonName;
-      if (kind === "tv" && season && data.seasons) {
+      if (kind === "tv" && targetSeason && data.seasons) {
         for (const s of data.seasons) {
-          if (s.season_number > 0 && s.season_number < season) {
+          if (s.season_number > 0 && s.season_number < targetSeason) {
             absoluteOffset += s.episode_count || 0;
           }
-          if (s.season_number === season) {
+          if (s.season_number === targetSeason) {
             seasonName = s.name;
           }
         }
@@ -503,9 +531,10 @@ async function resolveStreamFromServer(server) {
 async function getStreams(tmdbId, mediaType = "tv", season, episode) {
   try {
     if (!tmdbId) return [];
-    const targetSeason = typeof season === "number" ? season : mediaType === "movie" ? 1 : 1;
-    const targetEpisode = typeof episode === "number" ? episode : 1;
-    const meta = await getTmdbMetadata(String(tmdbId), mediaType, targetSeason);
+    const idInfo = parseIncomingId(tmdbId, season, episode);
+    const targetSeason = idInfo.season;
+    const targetEpisode = idInfo.episode;
+    const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
     if (!meta || !meta.title) {
       return [];
     }

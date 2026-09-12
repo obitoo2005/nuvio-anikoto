@@ -1,6 +1,6 @@
 {
   "name": "Anikoto",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Watch anime series and movies with English Sub and Dub from Anikoto.cz",
   "author": "obitoo2005",
   "scrapers": [
@@ -8,14 +8,14 @@
       "id": "anikoto",
       "name": "Anikoto.cz",
       "description": "Stream HD anime episodes with English Sub & Dub, subtitles, and multi-server redundancy from Anikoto.cz",
-      "version": "1.0.0",
+      "version": "1.0.2",
       "filename": "providers/anikoto.js",
-      "supportedTypes": ["tv", "movie", "anime"],
+      "supportedTypes": ["tv", "movie", "anime", "series"],
       "enabled": true,
       "hasSettings": false,
       "logo": "https://anikoto.cz/AnikotoTheme/assets/images/favicon.png",
-      "formats": ["m3u8"],
-      "supportedFormats": ["m3u8"],
+      "formats": ["m3u8", "mp4"],
+      "supportedFormats": ["m3u8", "mp4"],
       "contentLanguage": ["en", "ja"]
     }
   ]
