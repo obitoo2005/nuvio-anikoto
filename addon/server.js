@@ -66,7 +66,6 @@ function parseCards(html) {
     const poster = m[3];
     const watchUrl = m[2];
 
-    // Save to global animeStore so /meta/ has the real name and poster
     animeStore.set(id, { title, poster, watchUrl });
 
     return {
@@ -211,12 +210,12 @@ async function fetchAnimeMeta(animeId) {
 
 const manifest = {
   id: "org.anikoto.nuvio.addon",
-  name: "Anikoto Catalogue",
-  description: "Live anime catalogue directly from Anikoto.cz (Trending, Latest Updates, Top Airing, Most Popular)",
-  version: "1.0.0",
-  resources: ["catalog", "meta"],
-  types: ["anime", "series"],
-  idPrefixes: ["anikoto:"],
+  name: "Anikoto All-in-One",
+  description: "Live anime catalogue and direct 1080p streaming from Anikoto.cz",
+  version: "1.1.0",
+  resources: ["catalog", "meta", "stream"],
+  types: ["anime", "series", "movie"],
+  idPrefixes: ["anikoto:", "tmdb:", "kitsu:"],
   catalogs: [
     {
       type: "anime",
@@ -314,6 +313,64 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 4. Video Streams (direct 1080p stream resolution)
+  if (pathname.startsWith("/stream/")) {
+    const parts = pathname.replace(/^\/stream\//, "").replace(/\.json$/, "").split("/");
+    const type = parts[0] || "series";
+    const fullId = parts[1] || "";
+
+    const cacheKey = `stream_${fullId}`;
+    const hit = getCached(cacheKey);
+    if (hit) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ streams: hit }));
+      return;
+    }
+
+    try {
+      const colonParts = fullId.split(":");
+      let season = 1;
+      let episode = 1;
+      if (colonParts.length >= 4) {
+        season = parseInt(colonParts[2], 10) || 1;
+        episode = parseInt(colonParts[3], 10) || 1;
+      } else if (colonParts.length === 3) {
+        episode = parseInt(colonParts[2], 10) || 1;
+      }
+
+      const provider = require("../providers/anikoto.js");
+      const results = await provider.getStreams(fullId, type === "movie" ? "movie" : "tv", season, episode);
+      const streams = results.map(r => ({
+        name: r.name || "Anikoto",
+        title: `${r.title}\n${r.quality || "1080p"}`,
+        url: r.url,
+        behaviorHints: {
+          notWebReady: true,
+          proxyHeaders: {
+            request: r.headers || {
+              "Referer": "https://megaplay.buzz/",
+              "Origin": "https://megaplay.buzz"
+            }
+          }
+        },
+        subtitles: (r.subtitles || []).map((sub, idx) => ({
+          id: String(idx + 1),
+          url: sub.url,
+          lang: sub.language || "English"
+        }))
+      }));
+
+      setCached(cacheKey, streams);
+      res.writeHead(200);
+      res.end(JSON.stringify({ streams }));
+      return;
+    } catch (err) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ streams: [] }));
+      return;
+    }
+  }
+
   res.writeHead(404);
   res.end(JSON.stringify({ error: "Not Found" }));
 });
@@ -322,7 +379,7 @@ function startServer(portToTry) {
   server.listen(portToTry, "0.0.0.0", () => {
     const localIp = getLocalIp();
     console.log("=====================================================");
-    console.log("   ANIKOTO CATALOGUE ADDON FOR NUVIO IS RUNNING!     ");
+    console.log("   ANIKOTO ALL-IN-ONE ADDON (CATALOGUE & STREAMS)    ");
     console.log("=====================================================");
     console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
     console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
