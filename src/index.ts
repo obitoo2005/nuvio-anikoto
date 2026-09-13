@@ -15,54 +15,63 @@ export async function getStreams(
   try {
     if (!tmdbId) return [];
 
-    // Extract clean ID, season, and episode from incoming ID (handles kitsu:12:1, tt123:1:1, etc.)
+    // Extract clean ID, season, and episode from incoming ID (handles anikoto:1642:1:1, kitsu:12:1, tt123:1:1, etc.)
     const idInfo = parseIncomingId(tmdbId, season, episode);
     const targetSeason = idInfo.season;
     const targetEpisode = idInfo.episode;
 
-    // 1. Fetch TMDB / Kitsu / IMDB metadata
-    const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
-    if (!meta || !meta.title) {
-      return [];
+    let seasonAnimeId = "";
+    let absoluteOffset = 0;
+
+    if (idInfo.isAnikoto) {
+      // Direct Anikoto ID: skip search & matching, resolve episodes directly
+      seasonAnimeId = idInfo.cleanId;
+    } else {
+      // 1. Fetch TMDB / Kitsu / IMDB metadata
+      const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
+      if (!meta || !meta.title) {
+        return [];
+      }
+      absoluteOffset = meta.absoluteOffset;
+
+      // 2. Search Anikoto for candidates using all available titles
+      const extraSubqueries: string[] = [];
+      if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
+      if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
+      if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+
+      const searchQueries = [
+        meta.title,
+        meta.originalTitle,
+        ...extraSubqueries,
+        ...(meta.alternateTitles || [])
+      ].filter((t): t is string => Boolean(t && t.trim()));
+
+      let candidates = [];
+      for (const q of searchQueries.slice(0, 8)) {
+        candidates = await searchAnikoto(q);
+        if (candidates.length > 0) break;
+      }
+      if (candidates.length === 0) return [];
+
+      // 3. Match the best candidate anime
+      const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
+      if (!matchedAnime || !matchedAnime.id) return [];
+
+      // 4. Resolve the correct season anime ID if multi-season
+      seasonAnimeId = await resolveTargetSeasonAnimeId(
+        matchedAnime.id,
+        targetSeason,
+        meta.seasonName
+      );
     }
-
-    // 2. Search Anikoto for candidates using all available titles
-    const extraSubqueries: string[] = [];
-    if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
-    if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
-    if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
-
-    const searchQueries = [
-      meta.title,
-      meta.originalTitle,
-      ...extraSubqueries,
-      ...(meta.alternateTitles || [])
-    ].filter((t): t is string => Boolean(t && t.trim()));
-
-    let candidates = [];
-    for (const q of searchQueries.slice(0, 8)) {
-      candidates = await searchAnikoto(q);
-      if (candidates.length > 0) break;
-    }
-    if (candidates.length === 0) return [];
-
-    // 3. Match the best candidate anime
-    const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
-    if (!matchedAnime || !matchedAnime.id) return [];
-
-    // 4. Resolve the correct season anime ID if multi-season
-    const seasonAnimeId = await resolveTargetSeasonAnimeId(
-      matchedAnime.id,
-      targetSeason,
-      meta.seasonName
-    );
 
     // 5. Fetch episodes for the target season
     const episodes = await getEpisodeList(seasonAnimeId);
     if (!episodes || episodes.length === 0) return [];
 
     // 6. Map and locate the requested episode
-    const matchedEp = resolveTargetEpisode(episodes, targetEpisode, meta.absoluteOffset);
+    const matchedEp = resolveTargetEpisode(episodes, targetEpisode, absoluteOffset);
     if (!matchedEp || !matchedEp.dataIds) return [];
 
     // 7. Get available servers for this episode

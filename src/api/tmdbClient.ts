@@ -7,6 +7,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 export interface ParsedIdInfo {
   cleanId: string;
   isKitsu: boolean;
+  isAnikoto: boolean;
   season: number;
   episode: number;
 }
@@ -21,7 +22,8 @@ export function parseIncomingId(
 
   const raw = String(rawId || "").trim();
   const isKitsu = raw.startsWith("kitsu:") || raw.startsWith("kitsu/");
-  const stripped = raw.replace(/^kitsu[:/]/, "").replace(/^tmdb[:/]/, "");
+  const isAnikoto = raw.startsWith("anikoto:") || raw.startsWith("anikoto/");
+  const stripped = raw.replace(/^kitsu[:/]/, "").replace(/^anikoto[:/]/, "").replace(/^tmdb[:/]/, "");
   const parts = stripped.split(":");
   const cleanId = parts[0].split("/")[0].trim();
 
@@ -29,7 +31,7 @@ export function parseIncomingId(
     if (s === undefined) s = parseInt(parts[1], 10);
     if (e === undefined) e = parseInt(parts[2], 10);
   } else if (parts.length === 2) {
-    if (isKitsu) {
+    if (isKitsu || isAnikoto) {
       if (e === undefined) e = parseInt(parts[1], 10);
       if (s === undefined) s = 1;
     } else {
@@ -40,6 +42,7 @@ export function parseIncomingId(
   return {
     cleanId,
     isKitsu,
+    isAnikoto,
     season: (typeof s === "number" && !isNaN(s)) ? s : 1,
     episode: (typeof e === "number" && !isNaN(e)) ? e : 1
   };
@@ -56,7 +59,18 @@ export async function getTmdbMetadata(
   const cleanId = parsed.cleanId;
   let targetSeason = parsed.season;
 
-  // 1. If Kitsu ID provided (e.g. kitsu:12:1 or kitsu:8671)
+  // 1. If direct Anikoto ID provided (e.g. anikoto:1642:1:1)
+  if (parsed.isAnikoto) {
+    return {
+      numericId: cleanId,
+      kind,
+      title: `Anikoto ${cleanId}`,
+      alternateTitles: [],
+      absoluteOffset: 0
+    };
+  }
+
+  // 2. If Kitsu ID provided (e.g. kitsu:12:1 or kitsu:8671)
   if (parsed.isKitsu) {
     try {
       const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
@@ -72,7 +86,6 @@ export async function getTmdbMetadata(
           .filter((t): t is string => Boolean(t && typeof t === "string"));
 
         if (mainTitle) {
-          // If Kitsu title explicitly indicates a season, respect it
           const titleSeason = extractSeasonNumber(mainTitle) || (origTitle ? extractSeasonNumber(origTitle) : null);
           if (titleSeason && titleSeason > 1) {
             targetSeason = titleSeason;
@@ -90,7 +103,6 @@ export async function getTmdbMetadata(
                 if (tmdbMeta) {
                   return {
                     ...tmdbMeta,
-                    // Keep Kitsu mainTitle as primary title for exact season searching on Anikoto
                     title: decodeHtmlEntities(mainTitle),
                     alternateTitles: [...new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])]
                   };
@@ -112,7 +124,7 @@ export async function getTmdbMetadata(
     } catch {}
   }
 
-  // 2. If IMDB ID provided (e.g. tt0388629:1:1 or tt0388629)
+  // 3. If IMDB ID provided (e.g. tt0388629:1:1 or tt0388629)
   let numericId: string | number = cleanId;
   if (cleanId.startsWith("tt")) {
     try {
@@ -133,7 +145,7 @@ export async function getTmdbMetadata(
     } catch {}
   }
 
-  // 3. Fetch detailed metadata from TMDB
+  // 4. Fetch detailed metadata from TMDB
   try {
     const url = `https://api.themoviedb.org/3/${kind}/${numericId}?api_key=${TMDB_API_KEY}&append_to_response=alternative_titles,external_ids`;
     const res = await fetch(url, { headers: { "User-Agent": UA } });
@@ -171,7 +183,7 @@ export async function getTmdbMetadata(
     }
   } catch {}
 
-  // 4. Keyless fallback by scraping themoviedb.org page directly
+  // 5. Keyless fallback by scraping themoviedb.org page directly
   try {
     const scrapeUrl = `https://www.themoviedb.org/${kind}/${numericId}`;
     const res = await fetch(scrapeUrl, { headers: { "User-Agent": UA } });

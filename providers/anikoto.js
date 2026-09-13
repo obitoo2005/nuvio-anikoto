@@ -70,14 +70,15 @@ function parseIncomingId(rawId, season, episode) {
   let e = typeof episode === "number" && !isNaN(episode) ? episode : void 0;
   const raw = String(rawId || "").trim();
   const isKitsu = raw.startsWith("kitsu:") || raw.startsWith("kitsu/");
-  const stripped = raw.replace(/^kitsu[:/]/, "").replace(/^tmdb[:/]/, "");
+  const isAnikoto = raw.startsWith("anikoto:") || raw.startsWith("anikoto/");
+  const stripped = raw.replace(/^kitsu[:/]/, "").replace(/^anikoto[:/]/, "").replace(/^tmdb[:/]/, "");
   const parts = stripped.split(":");
   const cleanId = parts[0].split("/")[0].trim();
   if (parts.length >= 3) {
     if (s === void 0) s = parseInt(parts[1], 10);
     if (e === void 0) e = parseInt(parts[2], 10);
   } else if (parts.length === 2) {
-    if (isKitsu) {
+    if (isKitsu || isAnikoto) {
       if (e === void 0) e = parseInt(parts[1], 10);
       if (s === void 0) s = 1;
     } else {
@@ -87,6 +88,7 @@ function parseIncomingId(rawId, season, episode) {
   return {
     cleanId,
     isKitsu,
+    isAnikoto,
     season: typeof s === "number" && !isNaN(s) ? s : 1,
     episode: typeof e === "number" && !isNaN(e) ? e : 1
   };
@@ -96,6 +98,15 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
   const parsed = parseIncomingId(rawId, season, episode);
   const cleanId = parsed.cleanId;
   let targetSeason = parsed.season;
+  if (parsed.isAnikoto) {
+    return {
+      numericId: cleanId,
+      kind,
+      title: `Anikoto ${cleanId}`,
+      alternateTitles: [],
+      absoluteOffset: 0
+    };
+  }
   if (parsed.isKitsu) {
     try {
       const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
@@ -124,7 +135,6 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
                 if (tmdbMeta) {
                   return {
                     ...tmdbMeta,
-                    // Keep Kitsu mainTitle as primary title for exact season searching on Anikoto
                     title: decodeHtmlEntities(mainTitle),
                     alternateTitles: [.../* @__PURE__ */ new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])]
                   };
@@ -601,36 +611,43 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
     const idInfo = parseIncomingId(tmdbId, season, episode);
     const targetSeason = idInfo.season;
     const targetEpisode = idInfo.episode;
-    const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
-    if (!meta || !meta.title) {
-      return [];
+    let seasonAnimeId = "";
+    let absoluteOffset = 0;
+    if (idInfo.isAnikoto) {
+      seasonAnimeId = idInfo.cleanId;
+    } else {
+      const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
+      if (!meta || !meta.title) {
+        return [];
+      }
+      absoluteOffset = meta.absoluteOffset;
+      const extraSubqueries = [];
+      if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
+      if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
+      if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+      const searchQueries = [
+        meta.title,
+        meta.originalTitle,
+        ...extraSubqueries,
+        ...meta.alternateTitles || []
+      ].filter((t) => Boolean(t && t.trim()));
+      let candidates = [];
+      for (const q of searchQueries.slice(0, 8)) {
+        candidates = await searchAnikoto(q);
+        if (candidates.length > 0) break;
+      }
+      if (candidates.length === 0) return [];
+      const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
+      if (!matchedAnime || !matchedAnime.id) return [];
+      seasonAnimeId = await resolveTargetSeasonAnimeId(
+        matchedAnime.id,
+        targetSeason,
+        meta.seasonName
+      );
     }
-    const extraSubqueries = [];
-    if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
-    if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
-    if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
-    const searchQueries = [
-      meta.title,
-      meta.originalTitle,
-      ...extraSubqueries,
-      ...meta.alternateTitles || []
-    ].filter((t) => Boolean(t && t.trim()));
-    let candidates = [];
-    for (const q of searchQueries.slice(0, 8)) {
-      candidates = await searchAnikoto(q);
-      if (candidates.length > 0) break;
-    }
-    if (candidates.length === 0) return [];
-    const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
-    if (!matchedAnime || !matchedAnime.id) return [];
-    const seasonAnimeId = await resolveTargetSeasonAnimeId(
-      matchedAnime.id,
-      targetSeason,
-      meta.seasonName
-    );
     const episodes = await getEpisodeList(seasonAnimeId);
     if (!episodes || episodes.length === 0) return [];
-    const matchedEp = resolveTargetEpisode(episodes, targetEpisode, meta.absoluteOffset);
+    const matchedEp = resolveTargetEpisode(episodes, targetEpisode, absoluteOffset);
     if (!matchedEp || !matchedEp.dataIds) return [];
     const rawServers = await getServerList(matchedEp.dataIds);
     if (!rawServers || rawServers.length === 0) return [];
