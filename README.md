@@ -27,8 +27,8 @@ A standalone local Stremio/Nuvio HTTP addon server that streams real-time catalo
    =====================================================
       ANIKOTO CATALOGUE ADDON FOR NUVIO IS RUNNING!     
    =====================================================
-   Local (this PC):   http://localhost:7000/manifest.json
-   Network (TV/Phone): http://192.168.1.X:7000/manifest.json
+   Local (this PC):    http://localhost:7070/manifest.json
+   Network (TV/Phone):  http://<your-ip>:7070/manifest.json
    =====================================================
    ```
 
@@ -37,8 +37,8 @@ A standalone local Stremio/Nuvio HTTP addon server that streams real-time catalo
 1. In Nuvio, go to **Settings (⚙️) &rarr; Addons** *(Note: Addons, not Plugins)*.
 2. Tap **Add Addon** (or the **`+`** button).
 3. Paste the URL:
-   - **If running Nuvio on this PC**: `http://localhost:7000/manifest.json`
-   - **If running Nuvio on your Phone or Android TV**: `http://<your-pc-ip>:7000/manifest.json`
+   - **If running Nuvio on this PC**: `http://localhost:7070/manifest.json`
+   - **If running Nuvio on your Phone or Android TV**: `http://<your-pc-ip>:7070/manifest.json`
 4. Tap **Install**.
 5. Go to **Settings &rarr; Homescreen** to arrange the Anikoto catalog rows to the top of your homepage.
 

@@ -1,7 +1,7 @@
 const http = require("http");
 const os = require("os");
 
-const PORT = process.env.PORT || 7000;
+let PORT = parseInt(process.env.PORT || "7070", 10);
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const BASE_URL = "https://anikoto.cz";
 
@@ -229,16 +229,27 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: "Not Found" }));
 });
 
-if (require.main === module) {
-  server.listen(PORT, "0.0.0.0", () => {
+function startServer(portToTry) {
+  server.listen(portToTry, "0.0.0.0", () => {
     const localIp = getLocalIp();
     console.log("=====================================================");
     console.log("   ANIKOTO CATALOGUE ADDON FOR NUVIO IS RUNNING!     ");
     console.log("=====================================================");
-    console.log(`Local (this PC):   http://localhost:${PORT}/manifest.json`);
-    console.log(`Network (TV/Phone): http://${localIp}:${PORT}/manifest.json`);
+    console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
+    console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
     console.log("=====================================================");
+  }).on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.log(`Port ${portToTry} is in use, trying port ${portToTry + 1}...`);
+      startServer(portToTry + 1);
+    } else {
+      console.error("Server error:", err);
+    }
   });
+}
+
+if (require.main === module) {
+  startServer(PORT);
 }
 
 module.exports = { server, manifest };
