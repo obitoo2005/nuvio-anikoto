@@ -5,7 +5,8 @@ export function scoreTitleMatch(
   candidateTitle: string,
   candidateJp: string | undefined,
   targetTitle: string,
-  targetSeason?: number
+  targetSeason?: number,
+  allSeasons?: Array<{ season_number: number; name: string }>
 ): number {
   const cNorm = cleanTitle(candidateTitle);
   const jNorm = candidateJp ? cleanTitle(candidateJp) : "";
@@ -37,7 +38,7 @@ export function scoreTitleMatch(
     }
   }
 
-  // 2. Strict season alignment penalty and boost
+  // 2. Strict season alignment penalty and boost from explicit numbers
   const candSeason = extractSeasonNumber(candidateTitle) || (candidateJp ? extractSeasonNumber(candidateJp) : null);
   const effectiveSeason = (typeof targetSeason === "number" && targetSeason > 0) ? targetSeason : 1;
 
@@ -54,6 +55,25 @@ export function scoreTitleMatch(
       score += 0.4;
     } else if (candSeason !== null && candSeason !== effectiveSeason) {
       score -= 0.6;
+    }
+  }
+
+  // 3. Named season alignment check from TMDB seasons metadata (e.g. "Descending Stories" is Season 2!)
+  if (allSeasons && allSeasons.length > 0) {
+    for (const s of allSeasons) {
+      if (s.season_number > 0 && s.name) {
+        const sDice = Math.max(
+          computeDiceScore(candidateTitle, s.name),
+          candidateJp ? computeDiceScore(candidateJp, s.name) : 0
+        );
+        if (sDice >= 0.75) {
+          if (s.season_number === effectiveSeason) {
+            score += 0.5; // Matches the exact named season from TMDB!
+          } else {
+            score -= 0.8; // Belongs to a different season! Disqualify!
+          }
+        }
+      }
     }
   }
 
@@ -80,7 +100,7 @@ export function findBestAnimeMatch(
   for (const item of candidates) {
     let maxScoreForItem = 0;
     for (const title of titlesToTry) {
-      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season);
+      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season, meta.allSeasons);
       if (sc > maxScoreForItem) {
         maxScoreForItem = sc;
       }

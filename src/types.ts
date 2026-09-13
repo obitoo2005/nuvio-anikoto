@@ -27,7 +27,6 @@ export interface PluginRuntimeResult {
 
 export interface TMDBSeasonInfo {
   season_number: number;
-  episode_count: number;
   name: string;
 }
 
@@ -39,6 +38,7 @@ export interface TMDBMetadata {
   alternateTitles: string[];
   imdbId?: string;
   seasonName?: string;
+  allSeasons?: TMDBSeasonInfo[];
   absoluteOffset: number;
 }
 

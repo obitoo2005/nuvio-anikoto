@@ -188,12 +188,16 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
       );
       let absoluteOffset = 0;
       let seasonName;
-      if (kind === "tv" && targetSeason && data.seasons) {
+      const allSeasons = [];
+      if (kind === "tv" && data.seasons) {
         for (const s of data.seasons) {
-          if (s.season_number > 0 && s.season_number < targetSeason) {
+          if (s.season_number != null && s.name) {
+            allSeasons.push({ season_number: s.season_number, name: decodeHtmlEntities(s.name) });
+          }
+          if (targetSeason && s.season_number > 0 && s.season_number < targetSeason) {
             absoluteOffset += s.episode_count || 0;
           }
-          if (s.season_number === targetSeason) {
+          if (targetSeason && s.season_number === targetSeason) {
             seasonName = s.name;
           }
         }
@@ -206,6 +210,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
         alternateTitles: altList.map((t) => decodeHtmlEntities(t)),
         imdbId: data.external_ids?.imdb_id,
         seasonName,
+        allSeasons,
         absoluteOffset
       };
     }
@@ -370,7 +375,7 @@ async function getServerPlayerUrl(linkId) {
 }
 
 // src/matching/titleMatcher.ts
-function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason) {
+function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason, allSeasons) {
   const cNorm = cleanTitle(candidateTitle);
   const jNorm = candidateJp ? cleanTitle(candidateJp) : "";
   const tNorm = cleanTitle(targetTitle);
@@ -412,6 +417,23 @@ function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason)
       score -= 0.6;
     }
   }
+  if (allSeasons && allSeasons.length > 0) {
+    for (const s of allSeasons) {
+      if (s.season_number > 0 && s.name) {
+        const sDice = Math.max(
+          computeDiceScore(candidateTitle, s.name),
+          candidateJp ? computeDiceScore(candidateJp, s.name) : 0
+        );
+        if (sDice >= 0.75) {
+          if (s.season_number === effectiveSeason) {
+            score += 0.5;
+          } else {
+            score -= 0.8;
+          }
+        }
+      }
+    }
+  }
   return Math.max(0, score);
 }
 function findBestAnimeMatch(candidates, meta, season) {
@@ -427,7 +449,7 @@ function findBestAnimeMatch(candidates, meta, season) {
   for (const item of candidates) {
     let maxScoreForItem = 0;
     for (const title of titlesToTry) {
-      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season);
+      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season, meta.allSeasons);
       if (sc > maxScoreForItem) {
         maxScoreForItem = sc;
       }

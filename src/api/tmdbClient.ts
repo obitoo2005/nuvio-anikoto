@@ -159,12 +159,16 @@ export async function getTmdbMetadata(
 
       let absoluteOffset = 0;
       let seasonName: string | undefined;
-      if (kind === "tv" && targetSeason && data.seasons) {
+      const allSeasons: Array<{ season_number: number; name: string }> = [];
+      if (kind === "tv" && data.seasons) {
         for (const s of data.seasons) {
-          if (s.season_number > 0 && s.season_number < targetSeason) {
+          if (s.season_number != null && s.name) {
+            allSeasons.push({ season_number: s.season_number, name: decodeHtmlEntities(s.name) });
+          }
+          if (targetSeason && s.season_number > 0 && s.season_number < targetSeason) {
             absoluteOffset += (s.episode_count || 0);
           }
-          if (s.season_number === targetSeason) {
+          if (targetSeason && s.season_number === targetSeason) {
             seasonName = s.name;
           }
         }
@@ -178,6 +182,7 @@ export async function getTmdbMetadata(
         alternateTitles: altList.map((t: string) => decodeHtmlEntities(t)),
         imdbId: data.external_ids?.imdb_id,
         seasonName,
+        allSeasons,
         absoluteOffset
       };
     }
