@@ -47,6 +47,28 @@ function extractSeasonNumber(title) {
   return num ? parseInt(num, 10) : null;
 }
 
+function parseStreamId(fullId) {
+  const raw = String(fullId || "").trim();
+  let season = 1;
+  let episode = 1;
+
+  const isAnikoto = raw.startsWith("anikoto:") || raw.startsWith("anikoto/");
+  const isKitsu = raw.startsWith("kitsu:") || raw.startsWith("kitsu/");
+  const isTmdb = raw.startsWith("tmdb:") || raw.startsWith("tmdb/");
+
+  const stripped = raw.replace(/^anikoto[:/]/, "").replace(/^kitsu[:/]/, "").replace(/^tmdb[:/]/, "");
+  const parts = stripped.split(":");
+  const baseId = parts[0];
+
+  if (parts.length >= 3) {
+    season = parseInt(parts[1], 10) || 1;
+    episode = parseInt(parts[2], 10) || 1;
+  } else if (parts.length === 2) {
+    episode = parseInt(parts[1], 10) || 1;
+  }
+  return { raw, baseId, isAnikoto, isKitsu, isTmdb, season, episode };
+}
+
 const ANIKOTO_GENRE_IDS = {
   "Action": "1",
   "Action & Adventure": "2344",
@@ -104,7 +126,6 @@ function parseCards(html, forceType = null) {
     const isMovie = forceType === "movie" || /\bmovie\b/i.test(title) || /\/movie\b/i.test(watchUrl);
     const itemType = isMovie ? "movie" : "series";
 
-    // Save to global animeStore so /meta/ has the real name, poster, and type
     animeStore.set(id, { title, poster, watchUrl, isMovie });
 
     return {
@@ -190,7 +211,6 @@ async function fetchAnimeMeta(animeId) {
       isMovie = true;
     }
 
-    // Extract the actual season number from title (e.g. Season 3 -> 3)
     const sNum = extractSeasonNumber(animeTitle) || 1;
 
     // 3. Query TMDB for high-res poster, background, and overview
@@ -240,7 +260,7 @@ async function fetchAnimeMeta(animeId) {
     const meta = {
       id: `anikoto:${animeId}`,
       type: isMovie ? "movie" : "series",
-      name: animeTitle, 
+      name: animeTitle,
       poster: animePoster,
       background: banner,
       genres,
@@ -249,7 +269,6 @@ async function fetchAnimeMeta(animeId) {
       description,
       videos
     };
-    delete meta.industrialName;
     setCached(cacheKey, meta);
     return meta;
   } catch {
@@ -261,10 +280,10 @@ const manifest = {
   id: "org.anikoto.nuvio.addon",
   name: "Anikoto All-in-One",
   description: "Complete live anime catalogue, movies, and direct 1080p streaming from Anikoto.cz",
-  version: "1.3.0",
+  version: "1.4.0",
   resources: ["catalog", "meta", "stream"],
-  types: ["anime", "series", "movie"],
-  idPrefixes: ["anikoto:", "tmdb:", "kitsu:"],
+  types: ["anime", "series", "movie", "tv"],
+  idPrefixes: [], // Empty array allows Nuvio to query this addon for ANY catalog (Kitsu, TMDB, Cinemeta, etc.)
   catalogs: [
     {
       type: "movie",
@@ -395,7 +414,6 @@ const server = http.createServer(async (req, res) => {
         metas = await fetchFilterMetas(`filter?sort=updated&${filterQuery}`);
       }
     } else {
-      // anikoto_popular (Browse All Anime)
       filterQuery += `&sort=views`;
       metas = await fetchFilterMetas(`filter?${filterQuery}`);
     }
@@ -416,7 +434,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 4. Video Streams (direct 1080p stream resolution)
+  // 4. Video Streams (resolves 1080p stream for ANY source ID)
   if (pathname.startsWith("/stream/")) {
     const parts = pathname.replace(/^\/stream\//, "").replace(/\.json$/, "").split("/");
     const type = parts[0] || "series";
@@ -431,18 +449,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const colonParts = fullId.split(":");
-      let season = 1;
-      let episode = 1;
-      if (colonParts.length >= 4) {
-        season = parseInt(colonParts[2], 10) || 1;
-        episode = parseInt(colonParts[3], 10) || 1;
-      } else if (colonParts.length === 3) {
-        episode = parseInt(colonParts[2], 10) || 1;
-      }
-
+      const parsedId = parseStreamId(fullId);
       const provider = require("../providers/anikoto.js");
-      const results = await provider.getStreams(fullId, type === "movie" ? "movie" : "tv", season, episode);
+      const results = await provider.getStreams(
+        parsedId.raw,
+        type === "movie" ? "movie" : "tv",
+        parsedId.season,
+        parsedId.episode
+      );
+
       const streams = results.map(r => ({
         name: r.name || "Anikoto",
         title: `${r.title}\n${r.quality || "1080p"}`,
@@ -482,7 +497,7 @@ function startServer(portToTry) {
   server.listen(portToTry, "0.0.0.0", () => {
     const localIp = getLocalIp();
     console.log("=====================================================");
-    console.log("   ANIKOTO ALL-IN-ONE ADDON (CATALOGUE, MOVIES & STREAMS)");
+    console.log("   ANIKOTO ALL-IN-ONE ADDON (UNIVERSAL COMPATIBILITY)");
     console.log("=====================================================");
     console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
     console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
