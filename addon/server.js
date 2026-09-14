@@ -39,6 +39,14 @@ function decodeHtmlEntities(str) {
     .replace(/&gt;/g, '>');
 }
 
+function extractSeasonNumber(title) {
+  if (!title) return null;
+  const match = title.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|part\s*(\d+))\b/i);
+  if (!match) return null;
+  const num = match[1] || match[2] || match[3];
+  return num ? parseInt(num, 10) : null;
+}
+
 const GENRE_MAP = {
   10759: "Action & Adventure",
   16: "Animation",
@@ -66,6 +74,7 @@ function parseCards(html) {
     const poster = m[3];
     const watchUrl = m[2];
 
+    // Save to global animeStore so /meta/ has the real name and poster
     animeStore.set(id, { title, poster, watchUrl });
 
     return {
@@ -147,6 +156,9 @@ async function fetchAnimeMeta(animeId) {
       animeTitle = `Anime ${animeId}`;
     }
 
+    // Extract the actual season number from title (e.g. Season 3 -> 3)
+    const sNum = extractSeasonNumber(animeTitle) || 1;
+
     // 3. Query TMDB for high-res poster, background, and overview
     let banner;
     let description = `Watch ${animeTitle} on Anikoto.cz (${matches.length} episodes available).`;
@@ -182,9 +194,9 @@ async function fetchAnimeMeta(animeId) {
     } catch {}
 
     const videos = matches.map(m => ({
-      id: `anikoto:${animeId}:1:${m[2]}`,
+      id: `anikoto:${animeId}:${sNum}:${m[2]}`,
       title: m[6] ? decodeHtmlEntities(m[6].trim()) : `Episode ${m[2]}`,
-      season: 1,
+      season: sNum,
       episode: parseInt(m[2], 10),
       thumbnail: animePoster
     }));
@@ -212,7 +224,7 @@ const manifest = {
   id: "org.anikoto.nuvio.addon",
   name: "Anikoto All-in-One",
   description: "Live anime catalogue and direct 1080p streaming from Anikoto.cz",
-  version: "1.1.0",
+  version: "1.1.1",
   resources: ["catalog", "meta", "stream"],
   types: ["anime", "series", "movie"],
   idPrefixes: ["anikoto:", "tmdb:", "kitsu:"],
