@@ -47,6 +47,34 @@ function extractSeasonNumber(title) {
   return num ? parseInt(num, 10) : null;
 }
 
+const ANIKOTO_GENRE_IDS = {
+  "Action": "1",
+  "Action & Adventure": "2344",
+  "Adventure": "2",
+  "Comedy": "8",
+  "Drama": "62",
+  "Ecchi": "214",
+  "Fantasy": "3",
+  "Horror": "222",
+  "Isekai": "74",
+  "Magic": "203",
+  "Mecha": "123",
+  "Military": "125",
+  "Music": "242",
+  "Mystery": "57",
+  "Psychological": "73",
+  "Romance": "28",
+  "Sci-Fi": "12",
+  "Shounen": "15",
+  "Slice of Life": "35",
+  "Sports": "29",
+  "Supernatural": "9",
+  "Suspense": "2316",
+  "Thriller": "54"
+};
+
+const ALL_GENRES = Object.keys(ANIKOTO_GENRE_IDS);
+
 const GENRE_MAP = {
   10759: "Action & Adventure",
   16: "Animation",
@@ -67,7 +95,7 @@ const GENRE_MAP = {
 };
 
 function parseCards(html) {
-  const matches = [...html.matchAll(/<div class="item[\s\S]*?<div class="ani poster[^"]*" data-tip="(\d+)"[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*alt="([^"]+)"[\s\S]*?<a class="name d-title"[^>]*>([\s\S]*?)<\/a>/gi)];
+  const matches = [...html.matchAll(/<div class="item[^"]*"[\s\S]*?data-tip="(\d+)"[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*alt="([^"]+)"[\s\S]*?<a class="name d-title"[^>]*>([\s\S]*?)<\/a>/gi)];
   return matches.map(m => {
     const id = m[1];
     const title = decodeHtmlEntities(m[5].replace(/<[^>]+>/g, "").trim());
@@ -223,34 +251,55 @@ async function fetchAnimeMeta(animeId) {
 const manifest = {
   id: "org.anikoto.nuvio.addon",
   name: "Anikoto All-in-One",
-  description: "Live anime catalogue and direct 1080p streaming from Anikoto.cz",
-  version: "1.1.1",
+  description: "Complete live anime catalogue and direct 1080p streaming from Anikoto.cz",
+  version: "1.2.0",
   resources: ["catalog", "meta", "stream"],
   types: ["anime", "series", "movie"],
   idPrefixes: ["anikoto:", "tmdb:", "kitsu:"],
   catalogs: [
     {
       type: "anime",
-      id: "anikoto_trending",
-      name: "Anikoto - Trending"
-    },
-    {
-      type: "anime",
-      id: "anikoto_latest",
-      name: "Anikoto - Latest Updates"
+      id: "anikoto_popular",
+      name: "Anikoto - Browse All Anime",
+      extra: [
+        { name: "genre", isRequired: false, options: ALL_GENRES },
+        { name: "search", isRequired: false },
+        { name: "skip", isRequired: false }
+      ]
     },
     {
       type: "anime",
       id: "anikoto_top_airing",
-      name: "Anikoto - Top Airing"
+      name: "Anikoto - Top Airing",
+      extra: [
+        { name: "genre", isRequired: false, options: ALL_GENRES },
+        { name: "skip", isRequired: false }
+      ]
     },
     {
       type: "anime",
-      id: "anikoto_popular",
-      name: "Anikoto - Most Popular",
+      id: "anikoto_trending",
+      name: "Anikoto - Trending",
       extra: [
+        { name: "skip", isRequired: false }
+      ]
+    },
+    {
+      type: "anime",
+      id: "anikoto_latest",
+      name: "Anikoto - Latest Updates",
+      extra: [
+        { name: "skip", isRequired: false }
+      ]
+    },
+    {
+      type: "anime",
+      id: "anikoto_movies",
+      name: "Anikoto - Anime Movies",
+      extra: [
+        { name: "genre", isRequired: false, options: ALL_GENRES },
         { name: "search", isRequired: false },
-        { name: "genre", isRequired: false, options: ["action", "adventure", "comedy", "drama", "fantasy", "romance", "sci-fi", "shounen", "supernatural"] }
+        { name: "skip", isRequired: false }
       ]
     }
   ]
@@ -278,35 +327,58 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Catalogs
+  // 2. Catalogs (Infinite scrolling with skip, genres, search)
   if (pathname.startsWith("/catalog/")) {
     const parts = pathname.replace(/^\/catalog\//, "").replace(/\.json$/, "").split("/");
     const type = parts[0];
     const catalogId = parts[1];
     const extraStr = parts[2] || "";
 
+    let skip = parseInt(parsedUrl.searchParams.get("skip") || "0", 10);
     let searchQuery = parsedUrl.searchParams.get("search") || "";
     let genreQuery = parsedUrl.searchParams.get("genre") || "";
-    if (!searchQuery && extraStr.includes("search=")) {
-      searchQuery = decodeURIComponent(extraStr.split("search=")[1].split("&")[0]);
+
+    if (extraStr) {
+      const extraParams = new URLSearchParams(extraStr);
+      if (!skip && extraParams.has("skip")) skip = parseInt(extraParams.get("skip") || "0", 10);
+      if (!searchQuery && extraParams.has("search")) searchQuery = extraParams.get("search") || "";
+      if (!genreQuery && extraParams.has("genre")) genreQuery = extraParams.get("genre") || "";
     }
-    if (!genreQuery && extraStr.includes("genre=")) {
-      genreQuery = decodeURIComponent(extraStr.split("genre=")[1].split("&")[0]);
+
+    const page = Math.floor(skip / 30) + 1;
+    let filterQuery = `page=${page}`;
+
+    if (searchQuery) {
+      filterQuery += `&keyword=${encodeURIComponent(searchQuery)}`;
+    }
+
+    if (genreQuery && ANIKOTO_GENRE_IDS[genreQuery]) {
+      filterQuery += `&genre[]=${ANIKOTO_GENRE_IDS[genreQuery]}`;
     }
 
     let metas = [];
-    if (searchQuery) {
-      metas = await fetchFilterMetas(`filter?keyword=${encodeURIComponent(searchQuery)}`);
-    } else if (genreQuery) {
-      metas = await fetchFilterMetas(`filter?genre=${encodeURIComponent(genreQuery)}`);
-    } else if (catalogId === "anikoto_trending") {
-      metas = await fetchWidgetMetas("trending");
-    } else if (catalogId === "anikoto_latest") {
-      metas = await fetchWidgetMetas("updated-all");
+    if (catalogId === "anikoto_movies") {
+      filterQuery += `&type=movie`;
+      metas = await fetchFilterMetas(`filter?${filterQuery}`);
     } else if (catalogId === "anikoto_top_airing") {
-      metas = await fetchFilterMetas("filter?status=airing&sort=views");
-    } else if (catalogId === "anikoto_popular") {
-      metas = await fetchFilterMetas("filter?sort=views");
+      filterQuery += `&status=airing&sort=views`;
+      metas = await fetchFilterMetas(`filter?${filterQuery}`);
+    } else if (catalogId === "anikoto_trending") {
+      if (page === 1 && !searchQuery && !genreQuery) {
+        metas = await fetchWidgetMetas("trending");
+      } else {
+        metas = await fetchFilterMetas(`filter?sort=views&${filterQuery}`);
+      }
+    } else if (catalogId === "anikoto_latest") {
+      if (page === 1 && !searchQuery && !genreQuery) {
+        metas = await fetchWidgetMetas("updated-all");
+      } else {
+        metas = await fetchFilterMetas(`filter?sort=updated&${filterQuery}`);
+      }
+    } else {
+      // anikoto_popular (Browse All Anime)
+      filterQuery += `&sort=views`;
+      metas = await fetchFilterMetas(`filter?${filterQuery}`);
     }
 
     res.writeHead(200);
@@ -391,7 +463,7 @@ function startServer(portToTry) {
   server.listen(portToTry, "0.0.0.0", () => {
     const localIp = getLocalIp();
     console.log("=====================================================");
-    console.log("   ANIKOTO ALL-IN-ONE ADDON (CATALOGUE & STREAMS)    ");
+    console.log("   ANIKOTO ALL-IN-ONE ADDON (ENTIRE LIBRARY & DISCOVER)");
     console.log("=====================================================");
     console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
     console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
