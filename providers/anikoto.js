@@ -654,7 +654,7 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
         ...meta.alternateTitles || []
       ].filter((t) => Boolean(t && t.trim()));
       let candidates = [];
-      for (const q of searchQueries.slice(0, 8)) {
+      for (const q of searchQueries.slice(0, 5)) {
         candidates = await searchAnikoto(q);
         if (candidates.length > 0) break;
       }
@@ -673,13 +673,14 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
     if (!matchedEp || !matchedEp.dataIds) return [];
     const rawServers = await getServerList(matchedEp.dataIds);
     if (!rawServers || rawServers.length === 0) return [];
-    const servers = rawServers.slice().sort((a, b) => {
+    const prioritized = rawServers.slice().sort((a, b) => {
       const aIsHd = a.serverName.toLowerCase().includes("hd");
       const bIsHd = b.serverName.toLowerCase().includes("hd");
       if (aIsHd && !bIsHd) return -1;
       if (!aIsHd && bIsHd) return 1;
       return 0;
     });
+    const servers = prioritized.slice(0, 3);
     const streamPromises = servers.map((s) => resolveStreamFromServer(s));
     const resolved = await Promise.all(streamPromises);
     const streams = resolved.filter((s) => Boolean(s && s.url));

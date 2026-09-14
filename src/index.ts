@@ -48,7 +48,7 @@ export async function getStreams(
       ].filter((t): t is string => Boolean(t && t.trim()));
 
       let candidates = [];
-      for (const q of searchQueries.slice(0, 8)) {
+      for (const q of searchQueries.slice(0, 5)) {
         candidates = await searchAnikoto(q);
         if (candidates.length > 0) break;
       }
@@ -78,8 +78,8 @@ export async function getStreams(
     const rawServers = await getServerList(matchedEp.dataIds);
     if (!rawServers || rawServers.length === 0) return [];
 
-    // Prioritize HD-1 (fast CDN) first, followed by Vidstream-2
-    const servers = rawServers.slice().sort((a, b) => {
+    // Prioritize HD-1 (fastest CDN) first, followed by Vidstream-2
+    const prioritized = rawServers.slice().sort((a, b) => {
       const aIsHd = a.serverName.toLowerCase().includes("hd");
       const bIsHd = b.serverName.toLowerCase().includes("hd");
       if (aIsHd && !bIsHd) return -1;
@@ -87,7 +87,10 @@ export async function getStreams(
       return 0;
     });
 
-    // 8. Resolve playable streams concurrently for all available servers
+    // Limit concurrent requests to top 3 servers to respond well under Nuvio timeout (under 2s)
+    const servers = prioritized.slice(0, 3);
+
+    // 8. Resolve playable streams concurrently
     const streamPromises = servers.map(s => resolveStreamFromServer(s));
     const resolved = await Promise.all(streamPromises);
 

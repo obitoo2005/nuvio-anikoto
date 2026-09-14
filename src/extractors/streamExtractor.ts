@@ -105,7 +105,6 @@ export async function resolveStreamFromServer(
     const langLabel = isDub ? "Dub" : "Sub";
     const langCode = isDub ? "en" : "ja";
 
-    // Distinct name so Nuvio cards show "HD-1 • Sub" and "Vidstream-2 • Sub"
     const displayName = `${server.serverName} • ${langLabel}`;
 
     return {
