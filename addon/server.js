@@ -8,7 +8,7 @@ const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 
 // In-memory caches
 const cache = new Map();
-const animeStore = new Map(); // stores anikotoId -> { title, poster, watchUrl }
+const animeStore = new Map(); // stores anikotoId -> { title, poster, watchUrl, isMovie }
 
 function getCached(key) {
   const item = cache.get(key);
@@ -94,24 +94,26 @@ const GENRE_MAP = {
   37: "Western"
 };
 
-function parseCards(html) {
+function parseCards(html, forceType = null) {
   const matches = [...html.matchAll(/<div class="item[^"]*"[\s\S]*?data-tip="(\d+)"[\s\S]*?<a href="([^"]+)"[\s\S]*?<img src="([^"]+)"[^>]*alt="([^"]+)"[\s\S]*?<a class="name d-title"[^>]*>([\s\S]*?)<\/a>/gi)];
   return matches.map(m => {
     const id = m[1];
     const title = decodeHtmlEntities(m[5].replace(/<[^>]+>/g, "").trim());
     const poster = m[3];
     const watchUrl = m[2];
+    const isMovie = forceType === "movie" || /\bmovie\b/i.test(title) || /\/movie\b/i.test(watchUrl);
+    const itemType = isMovie ? "movie" : "series";
 
-    // Save to global animeStore so /meta/ has the real name and poster
-    animeStore.set(id, { title, poster, watchUrl });
+    // Save to global animeStore so /meta/ has the real name, poster, and type
+    animeStore.set(id, { title, poster, watchUrl, isMovie });
 
     return {
       id: `anikoto:${id}`,
-      type: "series",
+      type: itemType,
       name: title,
       poster: poster,
       genres: ["Anime"],
-      description: `Watch ${title} online on Anikoto.`
+      description: isMovie ? `Watch ${title} full movie online on Anikoto.` : `Watch ${title} online on Anikoto.`
     };
   });
 }
@@ -133,8 +135,8 @@ async function fetchWidgetMetas(widgetName) {
   }
 }
 
-async function fetchFilterMetas(pathAndQuery) {
-  const cacheKey = `filter_${pathAndQuery}`;
+async function fetchFilterMetas(pathAndQuery, forceType = null) {
+  const cacheKey = `filter_${pathAndQuery}_${forceType || ""}`;
   const hit = getCached(cacheKey);
   if (hit) return hit;
   try {
@@ -142,7 +144,7 @@ async function fetchFilterMetas(pathAndQuery) {
       headers: { "User-Agent": UA, "Referer": `${BASE_URL}/` }
     });
     const html = await res.text();
-    const cards = parseCards(html);
+    const cards = parseCards(html, forceType);
     setCached(cacheKey, cards);
     return cards;
   } catch {
@@ -167,6 +169,7 @@ async function fetchAnimeMeta(animeId) {
     let stored = animeStore.get(animeId);
     let animeTitle = stored?.title;
     let animePoster = stored?.poster;
+    let isMovie = stored?.isMovie || false;
 
     if (!animeTitle) {
       try {
@@ -183,16 +186,20 @@ async function fetchAnimeMeta(animeId) {
     if (!animeTitle) {
       animeTitle = `Anime ${animeId}`;
     }
+    if (/\bmovie\b/i.test(animeTitle)) {
+      isMovie = true;
+    }
 
     // Extract the actual season number from title (e.g. Season 3 -> 3)
     const sNum = extractSeasonNumber(animeTitle) || 1;
 
     // 3. Query TMDB for high-res poster, background, and overview
     let banner;
-    let description = `Watch ${animeTitle} on Anikoto.cz (${matches.length} episodes available).`;
+    let description = isMovie ? `Watch ${animeTitle} full movie on Anikoto.cz.` : `Watch ${animeTitle} on Anikoto.cz (${matches.length} episodes available).`;
     let genres = ["Animation", "Action", "Fantasy"];
     let releaseInfo;
     let imdbRating;
+    const searchKind = isMovie ? "movie" : "tv";
 
     try {
       const cleanSearch = animeTitle
@@ -201,7 +208,7 @@ async function fetchAnimeMeta(animeId) {
         .replace(/\bMovie.*$/i, "")
         .replace(/[:\-].*$/g, "")
         .trim() || animeTitle;
-      const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanSearch)}`, {
+      const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchKind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanSearch)}`, {
         headers: { "User-Agent": UA }
       });
       if (tmdbRes.ok) {
@@ -211,7 +218,8 @@ async function fetchAnimeMeta(animeId) {
           if (top.poster_path) animePoster = `https://image.tmdb.org/t/p/w500${top.poster_path}`;
           if (top.backdrop_path) banner = `https://image.tmdb.org/t/p/original${top.backdrop_path}`;
           if (top.overview) description = top.overview;
-          if (top.first_air_date) releaseInfo = top.first_air_date.slice(0, 4);
+          const dateStr = top.first_air_date || top.release_date;
+          if (dateStr) releaseInfo = dateStr.slice(0, 4);
           if (top.vote_average) imdbRating = String(top.vote_average.toFixed(1));
           if (top.genre_ids && top.genre_ids.length > 0) {
             const gList = top.genre_ids.map((id) => GENRE_MAP[id]).filter(Boolean);
@@ -223,16 +231,16 @@ async function fetchAnimeMeta(animeId) {
 
     const videos = matches.map(m => ({
       id: `anikoto:${animeId}:${sNum}:${m[2]}`,
-      title: m[6] ? decodeHtmlEntities(m[6].trim()) : `Episode ${m[2]}`,
-      season: sNum,
+      title: isMovie ? animeTitle : (m[6] ? decodeHtmlEntities(m[6].trim()) : `Episode ${m[2]}`),
+      season: isMovie ? 1 : sNum,
       episode: parseInt(m[2], 10),
       thumbnail: animePoster
     }));
 
     const meta = {
       id: `anikoto:${animeId}`,
-      type: "series",
-      name: animeTitle,
+      type: isMovie ? "movie" : "series",
+      name: animeTitle, 
       poster: animePoster,
       background: banner,
       genres,
@@ -241,6 +249,7 @@ async function fetchAnimeMeta(animeId) {
       description,
       videos
     };
+    delete meta.industrialName;
     setCached(cacheKey, meta);
     return meta;
   } catch {
@@ -251,12 +260,22 @@ async function fetchAnimeMeta(animeId) {
 const manifest = {
   id: "org.anikoto.nuvio.addon",
   name: "Anikoto All-in-One",
-  description: "Complete live anime catalogue and direct 1080p streaming from Anikoto.cz",
-  version: "1.2.0",
+  description: "Complete live anime catalogue, movies, and direct 1080p streaming from Anikoto.cz",
+  version: "1.3.0",
   resources: ["catalog", "meta", "stream"],
   types: ["anime", "series", "movie"],
   idPrefixes: ["anikoto:", "tmdb:", "kitsu:"],
   catalogs: [
+    {
+      type: "movie",
+      id: "anikoto_movies",
+      name: "Anikoto - Anime Movies",
+      extra: [
+        { name: "genre", isRequired: false, options: ALL_GENRES },
+        { name: "search", isRequired: false },
+        { name: "skip", isRequired: false }
+      ]
+    },
     {
       type: "anime",
       id: "anikoto_popular",
@@ -294,7 +313,7 @@ const manifest = {
     },
     {
       type: "anime",
-      id: "anikoto_movies",
+      id: "anikoto_movies_anime",
       name: "Anikoto - Anime Movies",
       extra: [
         { name: "genre", isRequired: false, options: ALL_GENRES },
@@ -327,7 +346,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Catalogs (Infinite scrolling with skip, genres, search)
+  // 2. Catalogs (Infinite scrolling with skip, genres, search, movies)
   if (pathname.startsWith("/catalog/")) {
     const parts = pathname.replace(/^\/catalog\//, "").replace(/\.json$/, "").split("/");
     const type = parts[0];
@@ -357,9 +376,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     let metas = [];
-    if (catalogId === "anikoto_movies") {
-      filterQuery += `&type=movie`;
-      metas = await fetchFilterMetas(`filter?${filterQuery}`);
+    if (catalogId === "anikoto_movies" || catalogId === "anikoto_movies_anime" || type === "movie") {
+      filterQuery += `&term_type[]=Movie&sort=views`;
+      metas = await fetchFilterMetas(`filter?${filterQuery}`, "movie");
     } else if (catalogId === "anikoto_top_airing") {
       filterQuery += `&status=airing&sort=views`;
       metas = await fetchFilterMetas(`filter?${filterQuery}`);
@@ -463,7 +482,7 @@ function startServer(portToTry) {
   server.listen(portToTry, "0.0.0.0", () => {
     const localIp = getLocalIp();
     console.log("=====================================================");
-    console.log("   ANIKOTO ALL-IN-ONE ADDON (ENTIRE LIBRARY & DISCOVER)");
+    console.log("   ANIKOTO ALL-IN-ONE ADDON (CATALOGUE, MOVIES & STREAMS)");
     console.log("=====================================================");
     console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
     console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
