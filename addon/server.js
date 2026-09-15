@@ -191,6 +191,33 @@ async function fetchAnimeMeta(animeId) {
 
     if (!animeTitle) {
       try {
+        const tipRes = await fetch(`${BASE_URL}/ajax/anime/tooltip/${encodeURIComponent(animeId)}`, {
+          headers: { "User-Agent": UA, "Referer": `${BASE_URL}/`, "X-Requested-With": "XMLHttpRequest" }
+        });
+        if (tipRes.ok) {
+          const tipHtml = await tipRes.text();
+          const titleMatch = tipHtml.match(/<div class="title d-title"[^>]*>([\s\S]*?)<\/div>/i);
+          if (titleMatch) {
+            animeTitle = decodeHtmlEntities(titleMatch[1].replace(/<[^>]+>/g, "").trim());
+          }
+          const watchMatch = tipHtml.match(/href="([^"]+)"\s+class="watch"/i);
+          if (watchMatch) {
+            const watchUrl = watchMatch[1];
+            if (/\/movie\b/i.test(watchUrl)) isMovie = true;
+            if (!animePoster) {
+              try {
+                const wRes = await fetch(watchUrl, { headers: { "User-Agent": UA, "Referer": `${BASE_URL}/` } });
+                if (wRes.ok) {
+                  const wHtml = await wRes.text();
+                  const ogMatch = wHtml.match(/<meta property="og:image" content="([^"]+)"/i);
+                  if (ogMatch) animePoster = ogMatch[1];
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+      try {
         const sRes = await fetch(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, {
           headers: { "User-Agent": UA, "Referer": `${BASE_URL}/`, "X-Requested-With": "XMLHttpRequest" }
         });
