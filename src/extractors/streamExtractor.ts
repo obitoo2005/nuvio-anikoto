@@ -1,5 +1,6 @@
 import { AnikotoServerItem, PluginRuntimeResult, PluginSubtitleResult } from "../types";
 import { getServerPlayerUrl } from "../api/anikotoClient";
+import { fetchWithTimeout } from "../utils/textUtils";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const U = "i?LMTAx0Q6,:}50U";
@@ -28,19 +29,20 @@ async function decryptEnc(encStr: string): Promise<{ file?: string } | null> {
     const cipherBytes = b64ToUint8(encStr);
     const key = await crypto.subtle.importKey(
       "raw",
-      keyBytes,
+      keyBytes.buffer as ArrayBuffer,
       { name: "AES-CBC" },
       false,
       ["decrypt"]
     );
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-CBC", iv: ivBytes },
+      { name: "AES-CBC", iv: ivBytes.buffer as ArrayBuffer },
       key,
-      cipherBytes
+      cipherBytes.buffer as ArrayBuffer
     );
     const text = new TextDecoder().decode(decrypted);
     return JSON.parse(text);
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] decryptEnc failed:", (err as Error)?.message || err);
     return null;
   }
 }
@@ -52,12 +54,12 @@ export async function resolveStreamFromServer(
     const playerUrl = await getServerPlayerUrl(server.linkId);
     if (!playerUrl) return null;
 
-    const playerRes = await fetch(playerUrl, {
+    const playerRes = await fetchWithTimeout(playerUrl, {
       headers: {
         "User-Agent": UA,
         "Referer": "https://anikoto.cz/"
       }
-    });
+    }, 2000);
     if (!playerRes.ok) return null;
     const playerHtml = await playerRes.text();
 
@@ -71,13 +73,13 @@ export async function resolveStreamFromServer(
     const sParam = parsed.searchParams.get("s") || "tcdn";
     const gsUrl = `${playerOrigin}/stream/getSourcesNew?id=${playerStreamId}&s=${encodeURIComponent(sParam)}`;
 
-    const gsRes = await fetch(gsUrl, {
+    const gsRes = await fetchWithTimeout(gsUrl, {
       headers: {
         "User-Agent": UA,
         "Referer": playerUrl,
         "X-Requested-With": "XMLHttpRequest"
       }
-    });
+    }, 2000);
     if (!gsRes.ok) return null;
     const gsJson = await gsRes.json();
 
@@ -120,7 +122,8 @@ export async function resolveStreamFromServer(
       },
       subtitles: subtitles.length > 0 ? subtitles : undefined
     };
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] resolveStreamFromServer failed:", (err as Error)?.message || err);
     return null;
   }
 }

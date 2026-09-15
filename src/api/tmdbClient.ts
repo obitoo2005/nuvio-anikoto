@@ -1,7 +1,7 @@
 import { TMDBMetadata } from "../types";
-import { decodeHtmlEntities, extractSeasonNumber } from "../utils/textUtils";
+import { decodeHtmlEntities, extractSeasonNumber, fetchWithTimeout } from "../utils/textUtils";
 
-const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+const TMDB_API_KEY = (typeof process !== "undefined" && process.env?.TMDB_API_KEY) || "439c478a771f35c05022f9feabcca01c";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export interface ParsedIdInfo {
@@ -73,7 +73,7 @@ export async function getTmdbMetadata(
   // 2. If Kitsu ID provided (e.g. kitsu:12:1 or kitsu:8671)
   if (parsed.isKitsu) {
     try {
-      const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
+      const kRes = await fetchWithTimeout(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
         headers: { "Accept": "application/vnd.api+json", "User-Agent": UA }
       });
       if (kRes.ok) {
@@ -92,7 +92,7 @@ export async function getTmdbMetadata(
           }
 
           try {
-            const sRes = await fetch(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
+            const sRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
               headers: { "User-Agent": UA }
             });
             if (sRes.ok) {
@@ -109,7 +109,7 @@ export async function getTmdbMetadata(
                 }
               }
             }
-          } catch {}
+          } catch (err) { console.warn("[Anikoto] Kitsu->TMDB search failed:", (err as Error)?.message || err); }
 
           return {
             numericId: cleanId,
@@ -121,7 +121,7 @@ export async function getTmdbMetadata(
           };
         }
       }
-    } catch {}
+    } catch (err) { console.warn("[Anikoto] Kitsu metadata fetch failed:", (err as Error)?.message || err); }
   }
 
   // 3. If IMDB ID provided (e.g. tt0388629:1:1 or tt0388629)
@@ -129,7 +129,7 @@ export async function getTmdbMetadata(
   if (cleanId.startsWith("tt")) {
     try {
       const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(cleanId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
-      const res = await fetch(findUrl, { headers: { "User-Agent": UA } });
+      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 3000);
       if (res.ok) {
         const data = await res.json();
         if (kind === "movie" && data.movie_results && data.movie_results.length > 0) {
@@ -142,13 +142,13 @@ export async function getTmdbMetadata(
           numericId = data.movie_results[0].id;
         }
       }
-    } catch {}
+    } catch (err) { console.warn("[Anikoto] IMDB->TMDB lookup failed:", (err as Error)?.message || err); }
   }
 
   // 4. Fetch detailed metadata from TMDB
   try {
     const url = `https://api.themoviedb.org/3/${kind}/${numericId}?api_key=${TMDB_API_KEY}&append_to_response=alternative_titles,external_ids`;
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 3000);
     if (res.ok) {
       const data = await res.json();
       const mainTitle = kind === "tv" ? data.name : data.title;
@@ -186,12 +186,12 @@ export async function getTmdbMetadata(
         absoluteOffset
       };
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] TMDB metadata fetch failed:", (err as Error)?.message || err); }
 
   // 5. Keyless fallback by scraping themoviedb.org page directly
   try {
     const scrapeUrl = `https://www.themoviedb.org/${kind}/${numericId}`;
-    const res = await fetch(scrapeUrl, { headers: { "User-Agent": UA } });
+    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 3000);
     if (res.ok) {
       const html = await res.text();
       const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
@@ -206,7 +206,7 @@ export async function getTmdbMetadata(
         };
       }
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] TMDB scrape fallback failed:", (err as Error)?.message || err); }
 
   return null;
 }

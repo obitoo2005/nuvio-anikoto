@@ -1,5 +1,5 @@
 import { AnikotoSearchResult, AnikotoSeasonItem, AnikotoEpisodeItem, AnikotoServerItem } from "../types";
-import { decodeHtmlEntities } from "../utils/textUtils";
+import { decodeHtmlEntities, fetchWithTimeout } from "../utils/textUtils";
 
 const BASE_URL = "https://anikoto.cz";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -16,7 +16,7 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
   if (!query || !query.trim()) return [];
   const filterUrl = `${BASE_URL}/filter?keyword=${encodeURIComponent(query.trim())}`;
   try {
-    const res = await fetch(filterUrl, { headers: HEADERS });
+    const res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3000);
     if (res.ok) {
       const html = await res.text();
       const matches = [...html.matchAll(/<div class="item [\s\S]*?<div class="ani poster tip" data-tip="(\d+)"[\s\S]*?<a class="name d-title" href="([^"]+)"(?:\s+data-jp="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/gi)];
@@ -29,12 +29,12 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
         }));
       }
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] searchAnikoto filter failed:", (err as Error)?.message || err); }
 
   // Fallback to ajax/anime/search
   try {
     const ajaxUrl = `${BASE_URL}/ajax/anime/search?keyword=${encodeURIComponent(query.trim())}`;
-    const res = await fetch(ajaxUrl, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 3000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result?.html || "";
@@ -49,26 +49,26 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
         };
       });
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] searchAnikoto ajax fallback failed:", (err as Error)?.message || err); }
 
   return [];
 }
 
 export async function getAnimeIdFromUrl(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, { headers: HEADERS });
+    const res = await fetchWithTimeout(url, { headers: HEADERS }, 3000);
     if (res.ok) {
       const html = await res.text();
       const idMatch = html.match(/data-id="(\d+)"/);
       if (idMatch) return idMatch[1];
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] getAnimeIdFromUrl failed:", (err as Error)?.message || err); }
   return null;
 }
 
 export async function getAnimeSeasons(animeId: string): Promise<AnikotoSeasonItem[]> {
   try {
-    const res = await fetch(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -79,13 +79,13 @@ export async function getAnimeSeasons(animeId: string): Promise<AnikotoSeasonIte
         name: decodeHtmlEntities(m[3].trim())
       }));
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] getAnimeSeasons failed:", (err as Error)?.message || err); }
   return [];
 }
 
 export async function getEpisodeList(animeId: string): Promise<AnikotoEpisodeItem[]> {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -98,13 +98,13 @@ export async function getEpisodeList(animeId: string): Promise<AnikotoEpisodeIte
         title: m[6] ? decodeHtmlEntities(m[6].trim()) : undefined
       }));
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] getEpisodeList failed:", (err as Error)?.message || err); }
   return [];
 }
 
 export async function getServerList(dataIds: string): Promise<AnikotoServerItem[]> {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 3000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -123,17 +123,17 @@ export async function getServerList(dataIds: string): Promise<AnikotoServerItem[
       }
       return list;
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] getServerList failed:", (err as Error)?.message || err); }
   return [];
 }
 
 export async function getServerPlayerUrl(linkId: string): Promise<string | null> {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/server?get=${encodeURIComponent(linkId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server?get=${encodeURIComponent(linkId)}`, { headers: AJAX_HEADERS }, 2000);
     if (res.ok) {
       const json = await res.json();
       return json?.result?.url || null;
     }
-  } catch {}
+  } catch (err) { console.warn("[Anikoto] getServerPlayerUrl failed:", (err as Error)?.message || err); }
   return null;
 }

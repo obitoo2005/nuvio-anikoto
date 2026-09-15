@@ -8,3 +8,14 @@ yarn-error.log*
 /watch.html
 /megaplay.html
 /*.html
+dist/
+.env
+*.log
+debug_*.js
+trace_*.js
+test_frieren*.js
+test_mushoku*.js
+inspect_*.js
+providers/anikoto_debug.js
+providers/anikoto_traced.js
+.codex-remote-attachments/

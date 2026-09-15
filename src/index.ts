@@ -1,4 +1,4 @@
-import { PluginRuntimeResult } from "./types";
+import { PluginRuntimeResult, AnikotoSearchResult } from "./types";
 import { getTmdbMetadata, parseIncomingId } from "./api/tmdbClient";
 import { searchAnikoto, getEpisodeList, getServerList } from "./api/anikotoClient";
 import { findBestAnimeMatch, scoreTitleMatch } from "./matching/titleMatcher";
@@ -47,7 +47,7 @@ export async function getStreams(
         ...(meta.alternateTitles || [])
       ].filter((t): t is string => Boolean(t && t.trim()));
 
-      let candidates = [];
+      let candidates: AnikotoSearchResult[] = [];
       for (const q of searchQueries.slice(0, 5)) {
         candidates = await searchAnikoto(q);
         if (candidates.length > 0) break;
@@ -97,7 +97,8 @@ export async function getStreams(
     // Filter out failed resolutions
     const streams = resolved.filter((s): s is PluginRuntimeResult => Boolean(s && s.url));
     return streams;
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getStreams failed:", (err as Error)?.message || err);
     return [];
   }
 }
@@ -106,7 +107,8 @@ export async function search(query: string) {
   try {
     if (!query) return [];
     return await searchAnikoto(query);
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] search failed:", (err as Error)?.message || err);
     return [];
   }
 }

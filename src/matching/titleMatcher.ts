@@ -114,7 +114,7 @@ export function findBestAnimeMatch(
       maxScoreForItem *= 0.5;
     } else if (!isMovie && isItemMovie) {
       maxScoreForItem *= 0.6;
-    } else if (!isMovie && !isItemOva && isItemOva) {
+    } else if (!isMovie && isItemOva) {
       maxScoreForItem *= 0.7;
     }
 

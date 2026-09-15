@@ -343,12 +343,13 @@ const manifest = {
   ]
 };
 
-const server = http.createServer(async (req, res) => {
+module.exports = async function(req, res) {
   console.log([]  );
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "s-maxage=7200, stale-while-revalidate=86400");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -492,29 +493,4 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end(JSON.stringify({ error: "Not Found" }));
-});
-
-function startServer(portToTry) {
-  server.listen(portToTry, "0.0.0.0", () => {
-    const localIp = getLocalIp();
-    console.log("=====================================================");
-    console.log("   ANIKOTO ALL-IN-ONE ADDON (UNIVERSAL COMPATIBILITY)");
-    console.log("=====================================================");
-    console.log(`Local (this PC):    http://localhost:${portToTry}/manifest.json`);
-    console.log(`Network (TV/Phone):  http://${localIp}:${portToTry}/manifest.json`);
-    console.log("=====================================================");
-  }).on("error", (err) => {
-    if (err.code === "EADDRINUSE") {
-      console.log(`Port ${portToTry} is in use, trying port ${portToTry + 1}...`);
-      startServer(portToTry + 1);
-    } else {
-      console.error("Server error:", err);
-    }
-  });
 }
-
-if (require.main === module) {
-  startServer(PORT);
-}
-
-module.exports = { server, manifest };

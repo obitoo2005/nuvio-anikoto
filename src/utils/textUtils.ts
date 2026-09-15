@@ -5,6 +5,8 @@
 export function decodeHtmlEntities(str: string): string {
   if (!str) return "";
   return str
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
     .replace(/&#039;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&quot;/g, '"')
@@ -39,6 +41,12 @@ export function computeDiceScore(s1: string, s2: string): number {
     if (setB.has(w)) intersection++;
   }
   return (2 * intersection) / (wordsA.length + wordsB.length);
+}
+
+export function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs: number = 3000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(id));
 }
 
 export function extractSeasonNumber(title: string): number | null {
