@@ -126,6 +126,7 @@ export async function search(query: string) {
 export {
   cleanTitle,
   extractSeasonNumber,
+  normalizeSubtitleLang,
   scoreTitleMatch,
   findBestAnimeMatch
 };

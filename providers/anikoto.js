@@ -32,7 +32,7 @@ module.exports = __toCommonJS(index_exports);
 // src/utils/textUtils.ts
 function decodeHtmlEntities(str) {
   if (!str) return "";
-  return str.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&#039;/g, "'").replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  return str.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&#039;/g, "'").replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 function cleanTitle(str) {
   if (!str) return "";
@@ -61,10 +61,67 @@ function fetchWithTimeout(url, opts = {}, timeoutMs = 3e3) {
 }
 function extractSeasonNumber(title) {
   if (!title) return null;
-  const match = title.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|part\s*(\d+))\b/i);
-  if (!match) return null;
-  const num = match[1] || match[2] || match[3];
-  return num ? parseInt(num, 10) : null;
+  const t = title.trim();
+  const m1 = t.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|\bs(\d+)\b|part\s*(\d+))/i);
+  if (m1) {
+    const num = m1[1] || m1[2] || m1[3] || m1[4];
+    if (num) return parseInt(num, 10);
+  }
+  const mRoman = t.match(/\b(VI|V|IV|III|II)\b/i);
+  if (mRoman) {
+    const r = mRoman[1].toUpperCase();
+    if (r === "II") return 2;
+    if (r === "III") return 3;
+    if (r === "IV") return 4;
+    if (r === "V") return 5;
+    if (r === "VI") return 6;
+  }
+  const mTrail = t.match(/\s+([2-9])$/);
+  if (mTrail) {
+    return parseInt(mTrail[1], 10);
+  }
+  return null;
+}
+var LANG_MAP = {
+  english: "eng",
+  spanish: "spa",
+  portuguese: "por",
+  french: "fre",
+  german: "ger",
+  italian: "ita",
+  russian: "rus",
+  arabic: "ara",
+  indonesian: "ind",
+  vietnamese: "vie",
+  thai: "tha",
+  turkish: "tur",
+  polish: "pol",
+  dutch: "dut",
+  japanese: "jpn",
+  korean: "kor",
+  chinese: "chi",
+  hindi: "hin",
+  bengali: "ben"
+};
+function normalizeSubtitleLang2(rawLabel) {
+  if (!rawLabel) return "eng";
+  const clean = rawLabel.toLowerCase().trim();
+  for (const [key, code] of Object.entries(LANG_MAP)) {
+    if (clean.includes(key)) return code;
+  }
+  if (/^[a-z]{3}$/i.test(clean)) return clean.toLowerCase();
+  if (/^[a-z]{2}$/i.test(clean)) {
+    if (clean === "en") return "eng";
+    if (clean === "es") return "spa";
+    if (clean === "pt") return "por";
+    if (clean === "fr") return "fre";
+    if (clean === "de") return "ger";
+    if (clean === "it") return "ita";
+    if (clean === "ja") return "jpn";
+    if (clean === "ko") return "kor";
+    if (clean === "zh") return "chi";
+  }
+  return "eng";
 }
 
 // src/api/tmdbClient.ts
@@ -447,7 +504,7 @@ function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason,
   if (effectiveSeason === 1) {
     if (candSeason !== null && candSeason > 1) {
       score -= 0.6;
-    } else if (candSeason === null) {
+    } else if (candSeason === null && score >= 0.4) {
       score += 0.2;
     }
   } else {
@@ -505,7 +562,7 @@ function findBestAnimeMatch(candidates, meta, season) {
       bestCandidate = item;
     }
   }
-  if (highestScore < 0.25) {
+  if (highestScore < 0.35) {
     return null;
   }
   return bestCandidate;
@@ -639,8 +696,8 @@ async function resolveStreamFromServer(server) {
     }
     const subtitles = (gsJson.tracks || []).filter((t) => Boolean(t.file)).map((t) => ({
       url: t.file,
-      language: t.label || "Unknown",
-      name: t.label || "Subtitles"
+      language: normalizeSubtitleLang2(t.label || "English"),
+      name: t.label || "English"
     }));
     const isDub = server.type === "dub";
     const langLabel = isDub ? "Dub" : "Sub";

@@ -1,6 +1,6 @@
 import { AnikotoServerItem, PluginRuntimeResult, PluginSubtitleResult } from "../types";
 import { getServerPlayerUrl } from "../api/anikotoClient";
-import { fetchWithTimeout } from "../utils/textUtils";
+import { fetchWithTimeout, normalizeSubtitleLang } from "../utils/textUtils";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const U = "i?LMTAx0Q6,:}50U";
@@ -99,8 +99,8 @@ export async function resolveStreamFromServer(
       .filter((t: { file?: string }) => Boolean(t.file))
       .map((t: { file: string; label?: string }) => ({
         url: t.file,
-        language: t.label || "Unknown",
-        name: t.label || "Subtitles"
+        language: normalizeSubtitleLang(t.label || "English"),
+        name: t.label || "English"
       }));
 
     const isDub = server.type === "dub";

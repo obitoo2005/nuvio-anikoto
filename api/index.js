@@ -5,7 +5,7 @@ let PORT = parseInt(process.env.PORT || "7070", 10);
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const BASE_URL = "https://anikoto.cz";
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "439c478a771f35c05022f9feabcca01c";
-const { extractSeasonNumber } = require("../providers/anikoto.js");
+const { extractSeasonNumber, normalizeSubtitleLang } = require("../providers/anikoto.js");
 
 // In-memory caches
 const cache = new Map();
@@ -479,7 +479,7 @@ module.exports = async function(req, res) {
         subtitles: (r.subtitles || []).map((sub, idx) => ({
           id: String(idx + 1),
           url: sub.url,
-          lang: sub.language || "English"
+          lang: normalizeSubtitleLang ? normalizeSubtitleLang(sub.language || sub.name) : (sub.language || "eng")
         }))
       }));
 

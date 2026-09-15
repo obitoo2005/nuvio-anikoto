@@ -79,7 +79,7 @@ export function scoreTitleMatch(
     // When Season 1 is requested, penalize any candidate that explicitly specifies Season 2+
     if (candSeason !== null && candSeason > 1) {
       score -= 0.6;
-    } else if (candSeason === null) {
+    } else if (candSeason === null && score >= 0.4) {
       score += 0.2;
     }
   } else {
@@ -154,7 +154,7 @@ export function findBestAnimeMatch(
     }
   }
 
-  if (highestScore < 0.25) {
+  if (highestScore < 0.35) {
     return null;
   }
 
