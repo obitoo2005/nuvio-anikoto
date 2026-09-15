@@ -39,19 +39,28 @@ export async function getStreams(
       if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
       if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
       if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+      if (meta.seasonName && meta.seasonName.includes(":")) extraSubqueries.push(meta.seasonName.split(":")[0].trim());
 
       const searchQueries = [
+        meta.seasonName,
         meta.title,
         meta.originalTitle,
         ...extraSubqueries,
         ...(meta.alternateTitles || [])
       ].filter((t): t is string => Boolean(t && t.trim()));
 
-      let candidates: AnikotoSearchResult[] = [];
-      for (const q of searchQueries.slice(0, 5)) {
-        candidates = await searchAnikoto(q);
-        if (candidates.length > 0) break;
+      // Deduplicate queries and search in parallel to gather all season variants and alternate titles
+      const uniqueQueries = [...new Set(searchQueries)].slice(0, 4);
+      const queryResults = await Promise.all(uniqueQueries.map(q => searchAnikoto(q)));
+      const candidateMap = new Map<string, AnikotoSearchResult>();
+      for (const list of queryResults) {
+        for (const item of list) {
+          if (!candidateMap.has(item.id)) {
+            candidateMap.set(item.id, item);
+          }
+        }
       }
+      const candidates = [...candidateMap.values()];
       if (candidates.length === 0) return [];
 
       // 3. Match the best candidate anime

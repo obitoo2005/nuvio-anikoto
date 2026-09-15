@@ -32,7 +32,7 @@ module.exports = __toCommonJS(index_exports);
 // src/utils/textUtils.ts
 function decodeHtmlEntities(str) {
   if (!str) return "";
-  return str.replace(/&#039;/g, "'").replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  return str.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&#039;/g, "'").replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 function cleanTitle(str) {
   if (!str) return "";
@@ -54,6 +54,11 @@ function computeDiceScore(s1, s2) {
   }
   return 2 * intersection / (wordsA.length + wordsB.length);
 }
+function fetchWithTimeout(url, opts = {}, timeoutMs = 3e3) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(id));
+}
 function extractSeasonNumber(title) {
   if (!title) return null;
   const match = title.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|part\s*(\d+))\b/i);
@@ -63,7 +68,7 @@ function extractSeasonNumber(title) {
 }
 
 // src/api/tmdbClient.ts
-var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+var TMDB_API_KEY = typeof process !== "undefined" && process.env?.TMDB_API_KEY || "439c478a771f35c05022f9feabcca01c";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 function parseIncomingId(rawId, season, episode) {
   let s = typeof season === "number" && !isNaN(season) ? season : void 0;
@@ -109,7 +114,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
   }
   if (parsed.isKitsu) {
     try {
-      const kRes = await fetch(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
+      const kRes = await fetchWithTimeout(`https://kitsu.io/api/edge/anime/${encodeURIComponent(cleanId)}`, {
         headers: { "Accept": "application/vnd.api+json", "User-Agent": UA }
       });
       if (kRes.ok) {
@@ -124,7 +129,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
             targetSeason = titleSeason;
           }
           try {
-            const sRes = await fetch(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
+            const sRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(mainTitle)}`, {
               headers: { "User-Agent": UA }
             });
             if (sRes.ok) {
@@ -141,7 +146,8 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
                 }
               }
             }
-          } catch {
+          } catch (err) {
+            console.warn("[Anikoto] Kitsu->TMDB search failed:", err?.message || err);
           }
           return {
             numericId: cleanId,
@@ -153,14 +159,15 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
           };
         }
       }
-    } catch {
+    } catch (err) {
+      console.warn("[Anikoto] Kitsu metadata fetch failed:", err?.message || err);
     }
   }
   let numericId = cleanId;
   if (cleanId.startsWith("tt")) {
     try {
       const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(cleanId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
-      const res = await fetch(findUrl, { headers: { "User-Agent": UA } });
+      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 3e3);
       if (res.ok) {
         const data = await res.json();
         if (kind === "movie" && data.movie_results && data.movie_results.length > 0) {
@@ -173,12 +180,13 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
           numericId = data.movie_results[0].id;
         }
       }
-    } catch {
+    } catch (err) {
+      console.warn("[Anikoto] IMDB->TMDB lookup failed:", err?.message || err);
     }
   }
   try {
     const url = `https://api.themoviedb.org/3/${kind}/${numericId}?api_key=${TMDB_API_KEY}&append_to_response=alternative_titles,external_ids`;
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 3e3);
     if (res.ok) {
       const data = await res.json();
       const mainTitle = kind === "tv" ? data.name : data.title;
@@ -214,11 +222,12 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
         absoluteOffset
       };
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] TMDB metadata fetch failed:", err?.message || err);
   }
   try {
     const scrapeUrl = `https://www.themoviedb.org/${kind}/${numericId}`;
-    const res = await fetch(scrapeUrl, { headers: { "User-Agent": UA } });
+    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 3e3);
     if (res.ok) {
       const html = await res.text();
       const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
@@ -233,7 +242,8 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
         };
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] TMDB scrape fallback failed:", err?.message || err);
   }
   return null;
 }
@@ -253,7 +263,7 @@ async function searchAnikoto(query) {
   if (!query || !query.trim()) return [];
   const filterUrl = `${BASE_URL}/filter?keyword=${encodeURIComponent(query.trim())}`;
   try {
-    const res = await fetch(filterUrl, { headers: HEADERS });
+    const res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3e3);
     if (res.ok) {
       const html = await res.text();
       const matches = [...html.matchAll(/<div class="item [\s\S]*?<div class="ani poster tip" data-tip="(\d+)"[\s\S]*?<a class="name d-title" href="([^"]+)"(?:\s+data-jp="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/gi)];
@@ -266,11 +276,12 @@ async function searchAnikoto(query) {
         }));
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] searchAnikoto filter failed:", err?.message || err);
   }
   try {
     const ajaxUrl = `${BASE_URL}/ajax/anime/search?keyword=${encodeURIComponent(query.trim())}`;
-    const res = await fetch(ajaxUrl, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 3e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result?.html || "";
@@ -285,25 +296,27 @@ async function searchAnikoto(query) {
         };
       });
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] searchAnikoto ajax fallback failed:", err?.message || err);
   }
   return [];
 }
 async function getAnimeIdFromUrl(url) {
   try {
-    const res = await fetch(url, { headers: HEADERS });
+    const res = await fetchWithTimeout(url, { headers: HEADERS }, 3e3);
     if (res.ok) {
       const html = await res.text();
       const idMatch = html.match(/data-id="(\d+)"/);
       if (idMatch) return idMatch[1];
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getAnimeIdFromUrl failed:", err?.message || err);
   }
   return null;
 }
 async function getAnimeSeasons(animeId) {
   try {
-    const res = await fetch(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -314,13 +327,14 @@ async function getAnimeSeasons(animeId) {
         name: decodeHtmlEntities(m[3].trim())
       }));
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getAnimeSeasons failed:", err?.message || err);
   }
   return [];
 }
 async function getEpisodeList(animeId) {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -333,13 +347,14 @@ async function getEpisodeList(animeId) {
         title: m[6] ? decodeHtmlEntities(m[6].trim()) : void 0
       }));
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getEpisodeList failed:", err?.message || err);
   }
   return [];
 }
 async function getServerList(dataIds) {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 3e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -358,23 +373,48 @@ async function getServerList(dataIds) {
       }
       return list;
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getServerList failed:", err?.message || err);
   }
   return [];
 }
 async function getServerPlayerUrl(linkId) {
   try {
-    const res = await fetch(`${BASE_URL}/ajax/server?get=${encodeURIComponent(linkId)}`, { headers: AJAX_HEADERS });
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server?get=${encodeURIComponent(linkId)}`, { headers: AJAX_HEADERS }, 2e3);
     if (res.ok) {
       const json = await res.json();
       return json?.result?.url || null;
     }
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getServerPlayerUrl failed:", err?.message || err);
   }
   return null;
 }
 
 // src/matching/titleMatcher.ts
+function matchesNamedSeason(candTitle, candJp, seasonName) {
+  for (const cand of [candTitle, candJp]) {
+    if (!cand) continue;
+    const cClean = cleanTitle(cand);
+    const sClean = cleanTitle(seasonName);
+    if (!cClean || !sClean) continue;
+    if (cClean === sClean) return true;
+    const cWords = cClean.split(" ").filter(Boolean);
+    const sWords = sClean.split(" ").filter(Boolean);
+    if (sWords.length === 0 || cWords.length === 0) continue;
+    const cSet = new Set(cWords);
+    let matchedInS = 0;
+    for (const w of sWords) {
+      if (cSet.has(w)) matchedInS++;
+    }
+    const sCoverage = matchedInS / sWords.length;
+    const cCoverage = matchedInS / cWords.length;
+    if (sCoverage >= 0.85 && cCoverage >= 0.6) {
+      return true;
+    }
+  }
+  return false;
+}
 function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason, allSeasons) {
   const cNorm = cleanTitle(candidateTitle);
   const jNorm = candidateJp ? cleanTitle(candidateJp) : "";
@@ -420,11 +460,7 @@ function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason,
   if (allSeasons && allSeasons.length > 0) {
     for (const s of allSeasons) {
       if (s.season_number > 0 && s.name) {
-        const sDice = Math.max(
-          computeDiceScore(candidateTitle, s.name),
-          candidateJp ? computeDiceScore(candidateJp, s.name) : 0
-        );
-        if (sDice >= 0.75) {
+        if (matchesNamedSeason(candidateTitle, candidateJp, s.name)) {
           if (s.season_number === effectiveSeason) {
             score += 0.5;
           } else {
@@ -439,6 +475,7 @@ function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason,
 function findBestAnimeMatch(candidates, meta, season) {
   if (!candidates || candidates.length === 0) return null;
   const titlesToTry = [
+    meta.seasonName,
     meta.title,
     meta.originalTitle,
     ...meta.alternateTitles || []
@@ -460,7 +497,7 @@ function findBestAnimeMatch(candidates, meta, season) {
       maxScoreForItem *= 0.5;
     } else if (!isMovie && isItemMovie) {
       maxScoreForItem *= 0.6;
-    } else if (!isMovie && !isItemOva && isItemOva) {
+    } else if (!isMovie && isItemOva) {
       maxScoreForItem *= 0.7;
     }
     if (maxScoreForItem > highestScore) {
@@ -546,19 +583,20 @@ async function decryptEnc(encStr) {
     const cipherBytes = b64ToUint8(encStr);
     const key = await crypto.subtle.importKey(
       "raw",
-      keyBytes,
+      keyBytes.buffer,
       { name: "AES-CBC" },
       false,
       ["decrypt"]
     );
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-CBC", iv: ivBytes },
+      { name: "AES-CBC", iv: ivBytes.buffer },
       key,
-      cipherBytes
+      cipherBytes.buffer
     );
     const text = new TextDecoder().decode(decrypted);
     return JSON.parse(text);
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] decryptEnc failed:", err?.message || err);
     return null;
   }
 }
@@ -566,12 +604,12 @@ async function resolveStreamFromServer(server) {
   try {
     const playerUrl = await getServerPlayerUrl(server.linkId);
     if (!playerUrl) return null;
-    const playerRes = await fetch(playerUrl, {
+    const playerRes = await fetchWithTimeout(playerUrl, {
       headers: {
         "User-Agent": UA3,
         "Referer": "https://anikoto.cz/"
       }
-    });
+    }, 2e3);
     if (!playerRes.ok) return null;
     const playerHtml = await playerRes.text();
     const dataIdMatch = playerHtml.match(/data-id="(\d+)"/);
@@ -581,13 +619,13 @@ async function resolveStreamFromServer(server) {
     const playerOrigin = parsed.origin;
     const sParam = parsed.searchParams.get("s") || "tcdn";
     const gsUrl = `${playerOrigin}/stream/getSourcesNew?id=${playerStreamId}&s=${encodeURIComponent(sParam)}`;
-    const gsRes = await fetch(gsUrl, {
+    const gsRes = await fetchWithTimeout(gsUrl, {
       headers: {
         "User-Agent": UA3,
         "Referer": playerUrl,
         "X-Requested-With": "XMLHttpRequest"
       }
-    });
+    }, 2e3);
     if (!gsRes.ok) return null;
     const gsJson = await gsRes.json();
     let masterFile = gsJson?.sources?.file;
@@ -621,7 +659,8 @@ async function resolveStreamFromServer(server) {
       },
       subtitles: subtitles.length > 0 ? subtitles : void 0
     };
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] resolveStreamFromServer failed:", err?.message || err);
     return null;
   }
 }
@@ -647,17 +686,25 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
       if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
       if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
       if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+      if (meta.seasonName && meta.seasonName.includes(":")) extraSubqueries.push(meta.seasonName.split(":")[0].trim());
       const searchQueries = [
+        meta.seasonName,
         meta.title,
         meta.originalTitle,
         ...extraSubqueries,
         ...meta.alternateTitles || []
       ].filter((t) => Boolean(t && t.trim()));
-      let candidates = [];
-      for (const q of searchQueries.slice(0, 5)) {
-        candidates = await searchAnikoto(q);
-        if (candidates.length > 0) break;
+      const uniqueQueries = [...new Set(searchQueries)].slice(0, 4);
+      const queryResults = await Promise.all(uniqueQueries.map((q) => searchAnikoto(q)));
+      const candidateMap = /* @__PURE__ */ new Map();
+      for (const list of queryResults) {
+        for (const item of list) {
+          if (!candidateMap.has(item.id)) {
+            candidateMap.set(item.id, item);
+          }
+        }
       }
+      const candidates = [...candidateMap.values()];
       if (candidates.length === 0) return [];
       const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
       if (!matchedAnime || !matchedAnime.id) return [];
@@ -685,7 +732,8 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
     const resolved = await Promise.all(streamPromises);
     const streams = resolved.filter((s) => Boolean(s && s.url));
     return streams;
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] getStreams failed:", err?.message || err);
     return [];
   }
 }
@@ -693,7 +741,8 @@ async function search(query) {
   try {
     if (!query) return [];
     return await searchAnikoto(query);
-  } catch {
+  } catch (err) {
+    console.warn("[Anikoto] search failed:", err?.message || err);
     return [];
   }
 }

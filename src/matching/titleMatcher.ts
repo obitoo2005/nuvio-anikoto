@@ -1,6 +1,39 @@
 import { AnikotoSearchResult, TMDBMetadata } from "../types";
 import { cleanTitle, computeDiceScore, extractSeasonNumber } from "../utils/textUtils";
 
+function matchesNamedSeason(
+  candTitle: string,
+  candJp: string | undefined,
+  seasonName: string
+): boolean {
+  for (const cand of [candTitle, candJp]) {
+    if (!cand) continue;
+    const cClean = cleanTitle(cand);
+    const sClean = cleanTitle(seasonName);
+    if (!cClean || !sClean) continue;
+
+    if (cClean === sClean) return true;
+
+    const cWords = cClean.split(" ").filter(Boolean);
+    const sWords = sClean.split(" ").filter(Boolean);
+    if (sWords.length === 0 || cWords.length === 0) continue;
+
+    const cSet = new Set(cWords);
+    let matchedInS = 0;
+    for (const w of sWords) {
+      if (cSet.has(w)) matchedInS++;
+    }
+    const sCoverage = matchedInS / sWords.length;
+    const cCoverage = matchedInS / cWords.length;
+
+    // The candidate must contain the distinctive words of the named season
+    if (sCoverage >= 0.85 && cCoverage >= 0.6) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function scoreTitleMatch(
   candidateTitle: string,
   candidateJp: string | undefined,
@@ -62,11 +95,7 @@ export function scoreTitleMatch(
   if (allSeasons && allSeasons.length > 0) {
     for (const s of allSeasons) {
       if (s.season_number > 0 && s.name) {
-        const sDice = Math.max(
-          computeDiceScore(candidateTitle, s.name),
-          candidateJp ? computeDiceScore(candidateJp, s.name) : 0
-        );
-        if (sDice >= 0.75) {
+        if (matchesNamedSeason(candidateTitle, candidateJp, s.name)) {
           if (s.season_number === effectiveSeason) {
             score += 0.5; // Matches the exact named season from TMDB!
           } else {
@@ -88,6 +117,7 @@ export function findBestAnimeMatch(
   if (!candidates || candidates.length === 0) return null;
 
   const titlesToTry = [
+    meta.seasonName,
     meta.title,
     meta.originalTitle,
     ...(meta.alternateTitles || [])
