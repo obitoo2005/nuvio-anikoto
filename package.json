@@ -8,7 +8,7 @@
     "url": "https://github.com/obitoo2005/nuvio-anikoto.git"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=neutral --target=es2020 --format=cjs --outfile=providers/anikoto.js",
+    "build:provider": "esbuild src/index.ts --bundle --platform=neutral --target=es2020 --format=cjs --outfile=providers/anikoto.js",
     "test": "node tests/test_all.js",
     "addon": "node addon/server.js"
   },
