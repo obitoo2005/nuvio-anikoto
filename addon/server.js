@@ -308,7 +308,7 @@ const manifest = {
   name: "Anikoto All-in-One",
   description: "Complete live anime catalogue, movies, and direct 1080p streaming from Anikoto.cz",
   version: "1.4.0",
-  resources: ["catalog", "meta", "stream"],
+  resources: ["catalog", "meta", "stream", "subtitles"],
   types: ["anime", "series", "movie", "tv"],
   idPrefixes: [], // Empty array allows Nuvio to query this addon for ANY catalog (Kitsu, TMDB, Cinemeta, etc.)
   catalogs: [
@@ -527,6 +527,59 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(200);
       res.end(JSON.stringify({ streams: [] }));
+      return;
+    }
+  }
+
+  // 4b. Dedicated Stremio Subtitles Resource (/subtitles/:type/:id.json)
+  if (pathname.startsWith("/subtitles/")) {
+    const parts = pathname.replace(/^\/subtitles\//, "").replace(/\.json$/, "").split("/");
+    const type = parts[0] || "series";
+    const fullId = parts[1] || "";
+
+    const cacheKey = `subtitles_${fullId}`;
+    const hit = getCached(cacheKey);
+    if (hit) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ subtitles: hit }));
+      return;
+    }
+
+    try {
+      const parsedId = parseStreamId(fullId);
+      const provider = require("../providers/anikoto.js");
+      const results = await provider.getStreams(
+        parsedId.raw,
+        type === "movie" ? "movie" : "tv",
+        parsedId.season,
+        parsedId.episode
+      );
+
+      const host = req.headers.host || "localhost";
+      const proto = req.headers["x-forwarded-proto"] || "http";
+      const origin = `${proto}://${host}`;
+      const prefix = pathname.startsWith("/addon") ? "/addon" : "";
+
+      const rawSubs = results[0]?.subtitles || [];
+      const subtitles = rawSubs.map((sub, idx) => {
+        const langCode = normalizeSubtitleLang ? normalizeSubtitleLang(sub.language || sub.name) : (sub.language || "eng");
+        const proxiedUrl = `${origin}${prefix}/sub.vtt?url=${encodeURIComponent(sub.url)}`;
+        return {
+          id: String(idx + 1),
+          url: proxiedUrl,
+          lang: langCode,
+          language: langCode,
+          name: sub.name || langCode
+        };
+      });
+
+      setCached(cacheKey, subtitles);
+      res.writeHead(200);
+      res.end(JSON.stringify({ subtitles }));
+      return;
+    } catch (err) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ subtitles: [] }));
       return;
     }
   }
