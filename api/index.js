@@ -361,7 +361,7 @@ module.exports = async function(req, res) {
   const pathname = decodeURIComponent(parsedUrl.pathname || "");
 
   // 1. Manifest
-  if (pathname === "/" || pathname === "/manifest.json") {
+  if (pathname === "/" || pathname.endsWith("/manifest.json")) {
     res.writeHead(200);
     res.end(JSON.stringify(manifest));
     return;
