@@ -358,10 +358,13 @@ module.exports = async function(req, res) {
   }
 
   const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  const pathname = decodeURIComponent(parsedUrl.pathname || "");
+  let pathname = decodeURIComponent(parsedUrl.pathname || "");
+  if (pathname.startsWith("/addon")) {
+    pathname = pathname.replace(/^\/addon/, "") || "/";
+  }
 
   // 1. Manifest
-  if (pathname === "/" || pathname.endsWith("/manifest.json")) {
+  if (pathname === "/" || pathname === "/manifest.json") {
     res.writeHead(200);
     res.end(JSON.stringify(manifest));
     return;
