@@ -100,7 +100,11 @@ export async function resolveStreamFromServer(
       .map((t: { file: string; label?: string }) => ({
         url: t.file,
         language: normalizeSubtitleLang(t.label || "English"),
-        name: t.label || "English"
+        name: t.label || "English",
+        headers: {
+          "Referer": `${playerOrigin}/`,
+          "Origin": playerOrigin
+        }
       }));
 
     const isDub = server.type === "dub";

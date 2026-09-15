@@ -697,7 +697,11 @@ async function resolveStreamFromServer(server) {
     const subtitles = (gsJson.tracks || []).filter((t) => Boolean(t.file)).map((t) => ({
       url: t.file,
       language: normalizeSubtitleLang2(t.label || "English"),
-      name: t.label || "English"
+      name: t.label || "English",
+      headers: {
+        "Referer": `${playerOrigin}/`,
+        "Origin": playerOrigin
+      }
     }));
     const isDub = server.type === "dub";
     const langLabel = isDub ? "Dub" : "Sub";

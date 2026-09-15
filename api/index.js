@@ -463,6 +463,11 @@ module.exports = async function(req, res) {
         parsedId.episode
       );
 
+      const host = req.headers.host || "localhost";
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const origin = `${proto}://${host}`;
+      const prefix = pathname.startsWith("/addon") ? "/addon" : "";
+
       const streams = results.map(r => ({
         name: r.name || "Anikoto",
         title: `${r.title}\n${r.quality || "1080p"}`,
@@ -476,11 +481,17 @@ module.exports = async function(req, res) {
             }
           }
         },
-        subtitles: (r.subtitles || []).map((sub, idx) => ({
-          id: String(idx + 1),
-          url: sub.url,
-          lang: normalizeSubtitleLang ? normalizeSubtitleLang(sub.language || sub.name) : (sub.language || "eng")
-        }))
+        subtitles: (r.subtitles || []).map((sub, idx) => {
+          const langCode = normalizeSubtitleLang ? normalizeSubtitleLang(sub.language || sub.name) : (sub.language || "eng");
+          const proxiedUrl = `${origin}${prefix}/sub.vtt?url=${encodeURIComponent(sub.url)}`;
+          return {
+            id: String(idx + 1),
+            url: proxiedUrl,
+            lang: langCode,
+            language: langCode,
+            name: sub.name || langCode
+          };
+        })
       }));
 
       setCached(cacheKey, streams);
@@ -490,6 +501,41 @@ module.exports = async function(req, res) {
     } catch (err) {
       res.writeHead(200);
       res.end(JSON.stringify({ streams: [] }));
+      return;
+    }
+  }
+
+  // 5. Subtitle Proxy (fixes HTTP 403 on protected subtitle CDNs)
+  if (pathname === "/sub" || pathname === "/sub.vtt") {
+    const subUrl = parsedUrl.searchParams.get("url");
+    if (!subUrl) {
+      res.writeHead(400);
+      res.end("Missing url parameter");
+      return;
+    }
+    try {
+      const subRes = await fetch(subUrl, {
+        headers: {
+          "User-Agent": UA,
+          "Referer": "https://megaplay.buzz/",
+          "Origin": "https://megaplay.buzz"
+        }
+      });
+      if (!subRes.ok) {
+        res.writeHead(subRes.status);
+        res.end();
+        return;
+      }
+      res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.writeHead(200);
+      const vttText = await subRes.text();
+      res.end(vttText);
+      return;
+    } catch (err) {
+      res.writeHead(500);
+      res.end();
       return;
     }
   }
