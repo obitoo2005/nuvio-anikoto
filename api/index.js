@@ -171,19 +171,24 @@ async function fetchFilterMetas(pathAndQuery, forceType = null) {
 }
 
 async function fetchAnimeMeta(animeId) {
-  const cacheKey = `meta_${animeId}`;
+  const cacheKey = "meta_" + animeId;
   const hit = getCached(cacheKey);
   if (hit) return hit;
   try {
-    // 1. Fetch episodes
-    const epRes = await fetch(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, {
-      headers: { "User-Agent": UA, "Referer": `${BASE_URL}/`, "X-Requested-With": "XMLHttpRequest" }
-    });
-    const epJson = await epRes.json();
-    const html = epJson.result || "";
-    const matches = [...html.matchAll(/<a[^>]+data-id="(\d+)"[^>]+data-num="(\d+)"[^>]+data-ids="([^"]+)"(?:[^>]*data-mal="(\d+)")?[^>]*>(?:<b>(\d+)<\/b>)?(?:\s*<span[^>]*class="d-title"[^>]*>([^<]*)<\/span>)?/gi)];
+    // 1. Check for franchise seasons/sequels first
+    let seasonItems = [];
+    try {
+      const sRes = await fetch(BASE_URL + "/api/seasons/" + encodeURIComponent(animeId), {
+        headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+      });
+      if (sRes.ok) {
+        const sJson = await sRes.json();
+        const sHtml = sJson?.result || "";
+        seasonItems = [...sHtml.matchAll(/<div class="swiper-slide season (active)?">[\s\S]*?<a href="([^"]+)"[^>]*>[\s\S]*?<div class="name"[^>]*>([\s\S]*?)<\/div>/gi)];
+      }
+    } catch {}
 
-    // 2. Resolve real title and poster from store or seasons
+    // 2. Resolve real title and poster from store or tooltip
     let stored = animeStore.get(animeId);
     let animeTitle = stored?.title;
     let animePoster = stored?.poster;
@@ -191,8 +196,8 @@ async function fetchAnimeMeta(animeId) {
 
     if (!animeTitle) {
       try {
-        const tipRes = await fetch(`${BASE_URL}/ajax/anime/tooltip/${encodeURIComponent(animeId)}`, {
-          headers: { "User-Agent": UA, "Referer": `${BASE_URL}/`, "X-Requested-With": "XMLHttpRequest" }
+        const tipRes = await fetch(BASE_URL + "/ajax/anime/tooltip/" + encodeURIComponent(animeId), {
+          headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
         });
         if (tipRes.ok) {
           const tipHtml = await tipRes.text();
@@ -206,7 +211,7 @@ async function fetchAnimeMeta(animeId) {
             if (/\/movie\b/i.test(watchUrl)) isMovie = true;
             if (!animePoster) {
               try {
-                const wRes = await fetch(watchUrl, { headers: { "User-Agent": UA, "Referer": `${BASE_URL}/` } });
+                const wRes = await fetch(watchUrl, { headers: { "User-Agent": UA, "Referer": BASE_URL + "/" } });
                 if (wRes.ok) {
                   const wHtml = await wRes.text();
                   const ogMatch = wHtml.match(/<meta property="og:image" content="([^"]+)"/i);
@@ -217,29 +222,85 @@ async function fetchAnimeMeta(animeId) {
           }
         }
       } catch {}
-      try {
-        const sRes = await fetch(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, {
-          headers: { "User-Agent": UA, "Referer": `${BASE_URL}/`, "X-Requested-With": "XMLHttpRequest" }
-        });
-        const sJson = await sRes.json();
-        const activeMatch = (sJson.result || "").match(/<div class="swiper-slide season active">[\s\S]*?<div class="name"[^>]*>([\s\S]*?)<\/div>/i);
-        if (activeMatch) {
-          animeTitle = decodeHtmlEntities(activeMatch[1].trim());
-        }
-      } catch {}
     }
+
+    if (!animeTitle && seasonItems.length > 0) {
+      const activeMatch = seasonItems.find(m => !!m[1]) || seasonItems[0];
+      if (activeMatch) {
+        animeTitle = decodeHtmlEntities(activeMatch[3].replace(/<[^>]+>/g, "").trim());
+      }
+    }
+
     if (!animeTitle) {
-      animeTitle = `Anime ${animeId}`;
+      animeTitle = "Anime " + animeId;
     }
     if (/\bmovie\b/i.test(animeTitle)) {
       isMovie = true;
     }
 
-    const sNum = extractSeasonNumber(animeTitle) || 1;
+    // 3. Build videos: If franchise exists, bundle all seasons/sequels/movies
+    let videos = [];
+    if (seasonItems.length > 1) {
+      const seasonInfos = await Promise.all(seasonItems.map(async (m, i) => {
+        const active = !!m[1];
+        const url = m[2];
+        const name = decodeHtmlEntities(m[3].replace(/<[^>]+>/g, "").trim());
 
-    // 3. Query TMDB for high-res poster, background, and overview
+        let targetId = animeId;
+        if (!active) {
+          try {
+            const pageRes = await fetch(url, { headers: { "User-Agent": UA } });
+            const pageHtml = await pageRes.text();
+            const idMatch = pageHtml.match(/data-id="(\d+)"/);
+            if (idMatch) targetId = idMatch[1];
+          } catch {}
+        }
+        return { seasonNumber: i + 1, active, name, targetId };
+      }));
+
+      const epLists = await Promise.all(seasonInfos.map(s => {
+        return fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(s.targetId), {
+          headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+        }).then(r => r.json()).catch(() => ({ result: "" }));
+      }));
+
+      for (let i = 0; i < seasonInfos.length; i++) {
+        const s = seasonInfos[i];
+        const epHtml = epLists[i]?.result || "";
+        const matches = [...epHtml.matchAll(/<a[^>]+data-id="(\d+)"[^>]+data-num="(\d+)"[^>]+data-ids="([^"]+)"(?:[^>]*data-mal="(\d+)")?[^>]*>(?:<b>(\d+)<\/b>)?(?:\s*<span[^>]*class="d-title"[^>]*>([^<]*)<\/span>)?/gi)];
+        for (const m of matches) {
+          const epNum = parseInt(m[2], 10);
+          const epTitle = m[6] ? decodeHtmlEntities(m[6].trim()) : ("Episode " + m[2]);
+          const fullTitle = "[" + s.name + "] " + epTitle;
+          videos.push({
+            id: "anikoto:" + s.targetId + ":" + s.seasonNumber + ":" + m[2],
+            title: fullTitle,
+            season: s.seasonNumber,
+            episode: epNum,
+            thumbnail: animePoster
+          });
+        }
+      }
+    } else {
+      const epRes = await fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(animeId), {
+        headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+      });
+      const epJson = await epRes.json();
+      const html = epJson.result || "";
+      const matches = [...html.matchAll(/<a[^>]+data-id="(\d+)"[^>]+data-num="(\d+)"[^>]+data-ids="([^"]+)"(?:[^>]*data-mal="(\d+)")?[^>]*>(?:<b>(\d+)<\/b>)?(?:\s*<span[^>]*class="d-title"[^>]*>([^<]*)<\/span>)?/gi)];
+      const sNum = extractSeasonNumber(animeTitle) || 1;
+      videos = matches.map(m => ({
+        id: "anikoto:" + animeId + ":" + sNum + ":" + m[2],
+        title: isMovie ? animeTitle : (m[6] ? decodeHtmlEntities(m[6].trim()) : ("Episode " + m[2])),
+        season: isMovie ? 1 : sNum,
+        episode: parseInt(m[2], 10),
+        thumbnail: animePoster
+      }));
+    }
+
+    // 4. Query TMDB for high-res poster, background, and overview
     let banner;
-    let description = isMovie ? `Watch ${animeTitle} full movie on Anikoto.cz.` : `Watch ${animeTitle} on Anikoto.cz (${matches.length} episodes available).`;
+    let description = isMovie ? ("Watch " + animeTitle + " full movie on Anikoto.cz.") : ("Watch " + animeTitle + " on Anikoto.cz (" + videos.length + " episodes available).");
     let genres = ["Animation", "Action", "Fantasy"];
     let releaseInfo;
     let imdbRating;
@@ -252,18 +313,15 @@ async function fetchAnimeMeta(animeId) {
         .replace(/\bMovie.*$/i, "")
         .replace(/[:\-].*$/g, "")
         .trim() || animeTitle;
-      const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/${searchKind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanSearch)}`, {
+      const tmdbRes = await fetch("https://api.themoviedb.org/3/search/" + searchKind + "?api_key=" + TMDB_API_KEY + "&query=" + encodeURIComponent(cleanSearch), {
         headers: { "User-Agent": UA }
       });
       if (tmdbRes.ok) {
         const tmdbData = await tmdbRes.json();
-        // Only use Animation (genre 16) results — never fall back to non-anime matches
-        // Fix: Don't override poster for Addon if we didn't find an animation result.
-        // Also, TMDB often requires "anime" or strict names to avoid grabbing Hollywood movies.
         const top = (tmdbData.results || []).find((x) => (x.genre_ids || []).includes(16));
         if (top) {
-          if (top.poster_path) animePoster = `https://image.tmdb.org/t/p/w500${top.poster_path}`;
-          if (top.backdrop_path) banner = `https://image.tmdb.org/t/p/original${top.backdrop_path}`;
+          if (top.poster_path) animePoster = "https://image.tmdb.org/t/p/w500" + top.poster_path;
+          if (top.backdrop_path) banner = "https://image.tmdb.org/t/p/original" + top.backdrop_path;
           if (top.overview) description = top.overview;
           const dateStr = top.first_air_date || top.release_date;
           if (dateStr) releaseInfo = dateStr.slice(0, 4);
@@ -276,16 +334,8 @@ async function fetchAnimeMeta(animeId) {
       }
     } catch {}
 
-    const videos = matches.map(m => ({
-      id: `anikoto:${animeId}:${sNum}:${m[2]}`,
-      title: isMovie ? animeTitle : (m[6] ? decodeHtmlEntities(m[6].trim()) : `Episode ${m[2]}`),
-      season: isMovie ? 1 : sNum,
-      episode: parseInt(m[2], 10),
-      thumbnail: animePoster
-    }));
-
     const meta = {
-      id: `anikoto:${animeId}`,
+      id: "anikoto:" + animeId,
       type: isMovie ? "movie" : "series",
       name: animeTitle,
       poster: animePoster,
