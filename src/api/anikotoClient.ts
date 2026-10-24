@@ -16,7 +16,12 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
   if (!query || !query.trim()) return [];
   const filterUrl = `${BASE_URL}/filter?keyword=${encodeURIComponent(query.trim())}`;
   try {
-    const res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3000);
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3500);
+    } catch {
+      res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 5000);
+    }
     if (res.ok) {
       const html = await res.text();
       const matches = [...html.matchAll(/<div class="item [\s\S]*?<div class="ani poster tip" data-tip="(\d+)"[\s\S]*?<a class="name d-title" href="([^"]+)"(?:\s+data-jp="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/gi)];
@@ -34,7 +39,7 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
   // Fallback to ajax/anime/search
   try {
     const ajaxUrl = `${BASE_URL}/ajax/anime/search?keyword=${encodeURIComponent(query.trim())}`;
-    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 3000);
+    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 4000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result?.html || "";
@@ -56,7 +61,7 @@ export async function searchAnikoto(query: string): Promise<AnikotoSearchResult[
 
 export async function getAnimeIdFromUrl(url: string): Promise<string | null> {
   try {
-    const res = await fetchWithTimeout(url, { headers: HEADERS }, 3000);
+    const res = await fetchWithTimeout(url, { headers: HEADERS }, 4000);
     if (res.ok) {
       const html = await res.text();
       const idMatch = html.match(/data-id="(\d+)"/);
@@ -68,7 +73,7 @@ export async function getAnimeIdFromUrl(url: string): Promise<string | null> {
 
 export async function getAnimeSeasons(animeId: string): Promise<AnikotoSeasonItem[]> {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3000);
+    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 4000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -85,7 +90,7 @@ export async function getAnimeSeasons(animeId: string): Promise<AnikotoSeasonIte
 
 export async function getEpisodeList(animeId: string): Promise<AnikotoEpisodeItem[]> {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3000);
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 4000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -104,7 +109,7 @@ export async function getEpisodeList(animeId: string): Promise<AnikotoEpisodeIte
 
 export async function getServerList(dataIds: string): Promise<AnikotoServerItem[]> {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 3000);
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 4000);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";

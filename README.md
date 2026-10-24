@@ -42,6 +42,17 @@ A standalone local Stremio/Nuvio HTTP addon server that streams real-time catalo
 4. Tap **Install**.
 5. Go to **Settings &rarr; Homescreen** to arrange the Anikoto catalog rows to the top of your homepage.
 
+### Hosted on Vercel
+
+The repository deploys both manifests:
+
+- **Plugin repository manifest (Plugins section):**
+  `https://nuvio-anikoto.vercel.app/manifest.json`
+- **Catalogue addon manifest (Addons section):**
+  `https://nuvio-anikoto.vercel.app/addon/manifest.json`
+
+Use the `/addon/manifest.json` URL for the addon. The root `/manifest.json` is the plugin repository manifest and will not install as an addon.
+
 ---
 
 ## 2. Anikoto Stream Provider Plugin (Video Playback)

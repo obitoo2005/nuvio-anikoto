@@ -1,7 +1,7 @@
 import { TMDBMetadata } from "../types";
 import { decodeHtmlEntities, extractSeasonNumber, fetchWithTimeout } from "../utils/textUtils";
 
-const TMDB_API_KEY = (typeof process !== "undefined" && process.env?.TMDB_API_KEY) || "439c478a771f35c05022f9feabcca01c";
+export const TMDB_API_KEY = (typeof process !== "undefined" && process.env?.TMDB_API_KEY) || "439c478a771f35c05022f9feabcca01c";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export interface ParsedIdInfo {
@@ -104,7 +104,8 @@ export async function getTmdbMetadata(
                   return {
                     ...tmdbMeta,
                     title: decodeHtmlEntities(mainTitle),
-                    alternateTitles: [...new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])]
+                    alternateTitles: [...new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])],
+                    resolvedSeason: targetSeason
                   };
                 }
               }
@@ -117,7 +118,8 @@ export async function getTmdbMetadata(
             title: decodeHtmlEntities(mainTitle),
             originalTitle: origTitle ? decodeHtmlEntities(origTitle) : undefined,
             alternateTitles: altList.map(t => decodeHtmlEntities(t)),
-            absoluteOffset: 0
+            absoluteOffset: 0,
+            resolvedSeason: targetSeason
           };
         }
       }
@@ -129,7 +131,7 @@ export async function getTmdbMetadata(
   if (cleanId.startsWith("tt")) {
     try {
       const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(cleanId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
-      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 3000);
+      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 4000);
       if (res.ok) {
         const data = await res.json();
         if (kind === "movie" && data.movie_results && data.movie_results.length > 0) {
@@ -148,7 +150,7 @@ export async function getTmdbMetadata(
   // 4. Fetch detailed metadata from TMDB
   try {
     const url = `https://api.themoviedb.org/3/${kind}/${numericId}?api_key=${TMDB_API_KEY}&append_to_response=alternative_titles,external_ids`;
-    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 3000);
+    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 4000);
     if (res.ok) {
       const data = await res.json();
       const mainTitle = kind === "tv" ? data.name : data.title;
@@ -159,17 +161,27 @@ export async function getTmdbMetadata(
 
       let absoluteOffset = 0;
       let seasonName: string | undefined;
-      const allSeasons: Array<{ season_number: number; name: string }> = [];
+      let seasonEpisodeCount: number | undefined;
+      let totalEpisodes = 0;
+      const allSeasons: Array<{ season_number: number; name: string; episode_count?: number }> = [];
       if (kind === "tv" && data.seasons) {
         for (const s of data.seasons) {
           if (s.season_number != null && s.name) {
-            allSeasons.push({ season_number: s.season_number, name: decodeHtmlEntities(s.name) });
+            allSeasons.push({
+              season_number: s.season_number,
+              name: decodeHtmlEntities(s.name),
+              episode_count: s.episode_count || 0
+            });
+          }
+          if (s.season_number > 0) {
+            totalEpisodes += (s.episode_count || 0);
           }
           if (targetSeason && s.season_number > 0 && s.season_number < targetSeason) {
             absoluteOffset += (s.episode_count || 0);
           }
           if (targetSeason && s.season_number === targetSeason) {
             seasonName = s.name;
+            seasonEpisodeCount = s.episode_count || 0;
           }
         }
       }
@@ -183,7 +195,10 @@ export async function getTmdbMetadata(
         imdbId: data.external_ids?.imdb_id,
         seasonName,
         allSeasons,
-        absoluteOffset
+        absoluteOffset,
+        totalEpisodes,
+        seasonEpisodeCount,
+        resolvedSeason: targetSeason
       };
     }
   } catch (err) { console.warn("[Anikoto] TMDB metadata fetch failed:", (err as Error)?.message || err); }
@@ -191,7 +206,7 @@ export async function getTmdbMetadata(
   // 5. Keyless fallback by scraping themoviedb.org page directly
   try {
     const scrapeUrl = `https://www.themoviedb.org/${kind}/${numericId}`;
-    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 3000);
+    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 4000);
     if (res.ok) {
       const html = await res.text();
       const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
@@ -202,7 +217,8 @@ export async function getTmdbMetadata(
           kind,
           title: decodeHtmlEntities(title),
           alternateTitles: [],
-          absoluteOffset: 0
+          absoluteOffset: 0,
+          resolvedSeason: targetSeason
         };
       }
     }

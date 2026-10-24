@@ -21,11 +21,21 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var index_exports = {};
 __export(index_exports, {
   cleanTitle: () => cleanTitle,
+  computeDiceScore: () => computeDiceScore,
+  coversNamedSeason: () => coversNamedSeason,
+  decodeHtmlEntities: () => decodeHtmlEntities,
   extractSeasonNumber: () => extractSeasonNumber,
   findBestAnimeMatch: () => findBestAnimeMatch,
   getStreams: () => getStreams,
+  isContinuousNumbering: () => isContinuousNumbering,
+  parseSeasonLabel: () => parseSeasonLabel,
+  planSeasonTarget: () => planSeasonTarget,
+  resolveTargetEpisode: () => resolveTargetEpisode,
+  resolveTargetSeasonAnimeId: () => resolveTargetSeasonAnimeId,
+  scoreBaseTitle: () => scoreBaseTitle,
   scoreTitleMatch: () => scoreTitleMatch,
-  search: () => search
+  search: () => search,
+  seasonAlignmentScore: () => seasonAlignmentScore
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -54,33 +64,107 @@ function computeDiceScore(s1, s2) {
   }
   return 2 * intersection / (wordsA.length + wordsB.length);
 }
-function fetchWithTimeout(url, opts = {}, timeoutMs = 3e3) {
+function fetchWithTimeout(url, opts = {}, timeoutMs = 4e3) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(id));
 }
+var SEASON_STOP_WORDS = /* @__PURE__ */ new Set([
+  "season",
+  "seasons",
+  "part",
+  "parts",
+  "cour",
+  "cours",
+  "the",
+  "a",
+  "an",
+  "of",
+  "and",
+  "to",
+  "in",
+  "on",
+  "for",
+  "with",
+  "ver",
+  "version",
+  "tv",
+  "arc",
+  "special",
+  "specials",
+  "movie",
+  "movies",
+  "film",
+  "films",
+  "final",
+  "story",
+  "chapter",
+  "volume",
+  "no",
+  "wa",
+  "ga",
+  "ni",
+  "de",
+  "wo",
+  "ova",
+  "ona",
+  "recap",
+  "picture",
+  "drama",
+  "mini",
+  "anime",
+  "half"
+]);
+function parseSeasonLabel(title) {
+  const raw = decodeHtmlEntities(String(title || "")).trim();
+  const lower = raw.toLowerCase();
+  const isSpecial = /\b(specials?|ova|onas?|recap|picture drama|mini anime)\b/i.test(lower);
+  const isMovie = /\b(movies?|films?)\b/i.test(lower);
+  const isFinalSeason = /\bfinal season\b/i.test(lower);
+  let season = null;
+  let part = null;
+  const mSeason = lower.match(/\bseason\s*0*(\d+)\b/i);
+  if (mSeason) season = parseInt(mSeason[1], 10);
+  if (season === null) {
+    const mNth = lower.match(/\b0*(\d+)\s*(?:st|nd|rd|th)\s*season\b/i);
+    if (mNth) season = parseInt(mNth[1], 10);
+  }
+  if (season === null) {
+    const mS = lower.match(/\bs0*(\d+)\b/i);
+    if (mS) season = parseInt(mS[1], 10);
+  }
+  if (season === null) {
+    const mRoman = raw.match(/\b(VI|V|IV|III|II)\b/);
+    if (mRoman) {
+      const map = { II: 2, III: 3, IV: 4, V: 5, VI: 6 };
+      season = map[mRoman[1].toUpperCase()] ?? null;
+    }
+  }
+  if (season === null) {
+    const mTrail = raw.match(/\s+([2-9])$/);
+    if (mTrail && !/\b(?:part|cour)\s*[2-9]\s*$/i.test(raw)) {
+      season = parseInt(mTrail[1], 10);
+    }
+  }
+  const mPart = lower.match(/\b(?:part|cour)\s*0*(\d+)\b/i);
+  if (mPart) part = parseInt(mPart[1], 10);
+  return { season, part, isSpecial, isMovie, isFinalSeason };
+}
 function extractSeasonNumber(title) {
-  if (!title) return null;
-  const t = title.trim();
-  const m1 = t.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|\bs(\d+)\b|part\s*(\d+))/i);
-  if (m1) {
-    const num = m1[1] || m1[2] || m1[3] || m1[4];
-    if (num) return parseInt(num, 10);
-  }
-  const mRoman = t.match(/\b(VI|V|IV|III|II)\b/i);
-  if (mRoman) {
-    const r = mRoman[1].toUpperCase();
-    if (r === "II") return 2;
-    if (r === "III") return 3;
-    if (r === "IV") return 4;
-    if (r === "V") return 5;
-    if (r === "VI") return 6;
-  }
-  const mTrail = t.match(/\s+([2-9])$/);
-  if (mTrail) {
-    return parseInt(mTrail[1], 10);
-  }
-  return null;
+  return parseSeasonLabel(title).season;
+}
+function distinctiveWords(text) {
+  return cleanTitle(text).split(" ").filter((w) => w.length >= 3 && !SEASON_STOP_WORDS.has(w));
+}
+function coversNamedSeason(candidate, seasonName) {
+  if (!candidate || !seasonName) return false;
+  const targetWords = distinctiveWords(seasonName);
+  if (targetWords.length === 0) return false;
+  const candidateWords = new Set(distinctiveWords(candidate));
+  if (candidateWords.size === 0) return false;
+  let matched = 0;
+  for (const w of targetWords) if (candidateWords.has(w)) matched++;
+  return matched / targetWords.length >= 0.6;
 }
 var LANG_MAP = {
   english: "eng",
@@ -103,7 +187,7 @@ var LANG_MAP = {
   hindi: "hin",
   bengali: "ben"
 };
-function normalizeSubtitleLang2(rawLabel) {
+function normalizeSubtitleLang(rawLabel) {
   if (!rawLabel) return "eng";
   const clean = rawLabel.toLowerCase().trim();
   for (const [key, code] of Object.entries(LANG_MAP)) {
@@ -198,7 +282,8 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
                   return {
                     ...tmdbMeta,
                     title: decodeHtmlEntities(mainTitle),
-                    alternateTitles: [.../* @__PURE__ */ new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])]
+                    alternateTitles: [.../* @__PURE__ */ new Set([tmdbMeta.title, ...tmdbMeta.alternateTitles, ...altList])],
+                    resolvedSeason: targetSeason
                   };
                 }
               }
@@ -212,7 +297,8 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
             title: decodeHtmlEntities(mainTitle),
             originalTitle: origTitle ? decodeHtmlEntities(origTitle) : void 0,
             alternateTitles: altList.map((t) => decodeHtmlEntities(t)),
-            absoluteOffset: 0
+            absoluteOffset: 0,
+            resolvedSeason: targetSeason
           };
         }
       }
@@ -224,7 +310,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
   if (cleanId.startsWith("tt")) {
     try {
       const findUrl = `https://api.themoviedb.org/3/find/${encodeURIComponent(cleanId)}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
-      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 3e3);
+      const res = await fetchWithTimeout(findUrl, { headers: { "User-Agent": UA } }, 4e3);
       if (res.ok) {
         const data = await res.json();
         if (kind === "movie" && data.movie_results && data.movie_results.length > 0) {
@@ -243,7 +329,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
   }
   try {
     const url = `https://api.themoviedb.org/3/${kind}/${numericId}?api_key=${TMDB_API_KEY}&append_to_response=alternative_titles,external_ids`;
-    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 3e3);
+    const res = await fetchWithTimeout(url, { headers: { "User-Agent": UA } }, 4e3);
     if (res.ok) {
       const data = await res.json();
       const mainTitle = kind === "tv" ? data.name : data.title;
@@ -253,17 +339,27 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
       );
       let absoluteOffset = 0;
       let seasonName;
+      let seasonEpisodeCount;
+      let totalEpisodes = 0;
       const allSeasons = [];
       if (kind === "tv" && data.seasons) {
         for (const s of data.seasons) {
           if (s.season_number != null && s.name) {
-            allSeasons.push({ season_number: s.season_number, name: decodeHtmlEntities(s.name) });
+            allSeasons.push({
+              season_number: s.season_number,
+              name: decodeHtmlEntities(s.name),
+              episode_count: s.episode_count || 0
+            });
+          }
+          if (s.season_number > 0) {
+            totalEpisodes += s.episode_count || 0;
           }
           if (targetSeason && s.season_number > 0 && s.season_number < targetSeason) {
             absoluteOffset += s.episode_count || 0;
           }
           if (targetSeason && s.season_number === targetSeason) {
             seasonName = s.name;
+            seasonEpisodeCount = s.episode_count || 0;
           }
         }
       }
@@ -276,7 +372,10 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
         imdbId: data.external_ids?.imdb_id,
         seasonName,
         allSeasons,
-        absoluteOffset
+        absoluteOffset,
+        totalEpisodes,
+        seasonEpisodeCount,
+        resolvedSeason: targetSeason
       };
     }
   } catch (err) {
@@ -284,7 +383,7 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
   }
   try {
     const scrapeUrl = `https://www.themoviedb.org/${kind}/${numericId}`;
-    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 3e3);
+    const res = await fetchWithTimeout(scrapeUrl, { headers: { "User-Agent": UA } }, 4e3);
     if (res.ok) {
       const html = await res.text();
       const ogMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
@@ -295,7 +394,8 @@ async function getTmdbMetadata(rawId, mediaType, season, episode) {
           kind,
           title: decodeHtmlEntities(title),
           alternateTitles: [],
-          absoluteOffset: 0
+          absoluteOffset: 0,
+          resolvedSeason: targetSeason
         };
       }
     }
@@ -320,7 +420,12 @@ async function searchAnikoto(query) {
   if (!query || !query.trim()) return [];
   const filterUrl = `${BASE_URL}/filter?keyword=${encodeURIComponent(query.trim())}`;
   try {
-    const res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3e3);
+    let res;
+    try {
+      res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 3500);
+    } catch {
+      res = await fetchWithTimeout(filterUrl, { headers: HEADERS }, 5e3);
+    }
     if (res.ok) {
       const html = await res.text();
       const matches = [...html.matchAll(/<div class="item [\s\S]*?<div class="ani poster tip" data-tip="(\d+)"[\s\S]*?<a class="name d-title" href="([^"]+)"(?:\s+data-jp="([^"]*)")?[^>]*>([\s\S]*?)<\/a>/gi)];
@@ -338,7 +443,7 @@ async function searchAnikoto(query) {
   }
   try {
     const ajaxUrl = `${BASE_URL}/ajax/anime/search?keyword=${encodeURIComponent(query.trim())}`;
-    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 3e3);
+    const res = await fetchWithTimeout(ajaxUrl, { headers: AJAX_HEADERS }, 4e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result?.html || "";
@@ -360,7 +465,7 @@ async function searchAnikoto(query) {
 }
 async function getAnimeIdFromUrl(url) {
   try {
-    const res = await fetchWithTimeout(url, { headers: HEADERS }, 3e3);
+    const res = await fetchWithTimeout(url, { headers: HEADERS }, 4e3);
     if (res.ok) {
       const html = await res.text();
       const idMatch = html.match(/data-id="(\d+)"/);
@@ -373,7 +478,7 @@ async function getAnimeIdFromUrl(url) {
 }
 async function getAnimeSeasons(animeId) {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3e3);
+    const res = await fetchWithTimeout(`${BASE_URL}/api/seasons/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 4e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -391,7 +496,7 @@ async function getAnimeSeasons(animeId) {
 }
 async function getEpisodeList(animeId) {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 3e3);
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, { headers: AJAX_HEADERS }, 4e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -411,7 +516,7 @@ async function getEpisodeList(animeId) {
 }
 async function getServerList(dataIds) {
   try {
-    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 3e3);
+    const res = await fetchWithTimeout(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(dataIds)}`, { headers: AJAX_HEADERS }, 4e3);
     if (res.ok) {
       const json = await res.json();
       const html = json?.result || "";
@@ -449,174 +554,605 @@ async function getServerPlayerUrl(linkId) {
 }
 
 // src/matching/titleMatcher.ts
-function matchesNamedSeason(candTitle, candJp, seasonName) {
-  for (const cand of [candTitle, candJp]) {
-    if (!cand) continue;
-    const cClean = cleanTitle(cand);
-    const sClean = cleanTitle(seasonName);
-    if (!cClean || !sClean) continue;
-    if (cClean === sClean) return true;
-    const cWords = cClean.split(" ").filter(Boolean);
-    const sWords = sClean.split(" ").filter(Boolean);
-    if (sWords.length === 0 || cWords.length === 0) continue;
-    const cSet = new Set(cWords);
-    let matchedInS = 0;
-    for (const w of sWords) {
-      if (cSet.has(w)) matchedInS++;
+function scoreBaseTitle(candidateTitle, candidateJp, targetTitle) {
+  const target = cleanTitle(targetTitle);
+  if (!target) return 0;
+  const candidates = [cleanTitle(candidateTitle), candidateJp ? cleanTitle(candidateJp) : ""].filter(Boolean);
+  let best = 0;
+  for (const cand of candidates) {
+    if (cand === target) {
+      best = Math.max(best, 1);
+      continue;
     }
-    const sCoverage = matchedInS / sWords.length;
-    const cCoverage = matchedInS / cWords.length;
-    if (sCoverage >= 0.85 && cCoverage >= 0.6) {
-      return true;
+    if (cand.startsWith(target) || target.startsWith(cand)) {
+      const ratio = Math.min(cand.length, target.length) / Math.max(cand.length, target.length);
+      best = Math.max(best, 0.8 * ratio);
+    } else if (cand.includes(target) || target.includes(cand)) {
+      const ratio = Math.min(cand.length, target.length) / Math.max(cand.length, target.length);
+      best = Math.max(best, 0.65 * ratio);
     }
+    const targetWords = distinctiveWords(target);
+    if (targetWords.length > 0) {
+      const candWords = new Set(distinctiveWords(cand));
+      let matched = 0;
+      for (const w of targetWords) if (candWords.has(w)) matched++;
+      const coverage = matched / targetWords.length;
+      if (coverage >= 0.8) {
+        best = Math.max(best, 0.7 + 0.1 * coverage);
+      }
+    }
+    best = Math.max(best, computeDiceScore(cand, target));
   }
-  return false;
+  return Math.min(1, best);
 }
-function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason, allSeasons) {
-  const cNorm = cleanTitle(candidateTitle);
-  const jNorm = candidateJp ? cleanTitle(candidateJp) : "";
-  const tNorm = cleanTitle(targetTitle);
-  if (!cNorm && !jNorm) return 0;
-  if (!tNorm) return 0;
+function seasonAlignmentScore(candidateTitle, candidateJp, targetSeason, seasonName, allSeasons, kind = "tv", baseTitles) {
+  const label = parseSeasonLabel(`${candidateTitle} ${candidateJp || ""}`);
+  const effectiveSeason = targetSeason > 0 ? targetSeason : 1;
   let score = 0;
-  if (cNorm === tNorm || jNorm === tNorm) {
-    score = 1;
-  } else {
-    for (const cand of [cNorm, jNorm]) {
-      if (!cand) continue;
-      if (cand === tNorm) {
-        score = Math.max(score, 1);
-        continue;
-      }
-      if (cand.startsWith(tNorm) || tNorm.startsWith(cand)) {
-        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-        score = Math.max(score, 0.8 * ratio);
-      } else if (cand.includes(tNorm) || tNorm.includes(cand)) {
-        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-        score = Math.max(score, 0.65 * ratio);
-      } else {
-        score = Math.max(score, computeDiceScore(cand, tNorm));
-      }
-    }
-  }
-  const candSeason = extractSeasonNumber(candidateTitle) || (candidateJp ? extractSeasonNumber(candidateJp) : null);
-  const effectiveSeason = typeof targetSeason === "number" && targetSeason > 0 ? targetSeason : 1;
-  if (effectiveSeason === 1) {
-    if (candSeason !== null && candSeason > 1) {
-      score -= 0.6;
-    } else if (candSeason === null && score >= 0.4) {
-      score += 0.2;
-    }
-  } else {
-    if (candSeason === effectiveSeason) {
-      score += 0.4;
-    } else if (candSeason !== null && candSeason !== effectiveSeason) {
-      score -= 0.6;
-    }
-  }
-  if (allSeasons && allSeasons.length > 0) {
+  const seasonWords = distinctiveWords(seasonName || "");
+  const baseWords = new Set((baseTitles || []).flatMap((t) => distinctiveWords(t)));
+  const seasonIsBaseTitle = seasonWords.length > 0 && seasonWords.every((w) => baseWords.has(w));
+  const effectiveSeasonName = seasonIsBaseTitle ? void 0 : seasonName;
+  if (effectiveSeasonName && (coversNamedSeason(candidateTitle, effectiveSeasonName) || coversNamedSeason(candidateJp || "", effectiveSeasonName))) {
+    score += 0.6;
+  } else if (effectiveSeasonName && allSeasons && allSeasons.length > 0) {
     for (const s of allSeasons) {
-      if (s.season_number > 0 && s.name) {
-        if (matchesNamedSeason(candidateTitle, candidateJp, s.name)) {
-          if (s.season_number === effectiveSeason) {
-            score += 0.5;
-          } else {
-            score -= 0.8;
-          }
+      if (s.season_number > 0 && s.name && s.season_number !== effectiveSeason) {
+        if (coversNamedSeason(candidateTitle, s.name) || coversNamedSeason(candidateJp || "", s.name)) {
+          score -= 0.3;
+          break;
         }
       }
     }
   }
-  return Math.max(0, score);
+  if (label.season !== null) {
+    if (label.season === effectiveSeason) {
+      score += 0.25;
+    } else {
+      score -= 0.5;
+    }
+  } else if (effectiveSeason === 1) {
+    score += 0.1;
+  }
+  if (label.isFinalSeason) {
+    const finalSeason = (allSeasons || []).find((s) => s.season_number > 0 && /\bfinal\b/i.test(s.name));
+    if (finalSeason) {
+      score += finalSeason.season_number === effectiveSeason ? 0.2 : -0.3;
+    }
+  }
+  if (label.isSpecial && effectiveSeason > 0 && !/\bspecial/i.test(seasonName || "")) {
+    score -= 0.35;
+  }
+  if (label.isMovie && kind !== "movie") {
+    score -= 0.5;
+  }
+  return score;
+}
+function scoreTitleMatch(candidateTitle, candidateJp, targetTitle, targetSeason, allSeasons) {
+  const effectiveSeason = typeof targetSeason === "number" && targetSeason > 0 ? targetSeason : 1;
+  const seasonName = allSeasons?.find((s) => s.season_number === effectiveSeason)?.name;
+  const base = scoreBaseTitle(candidateTitle, candidateJp, targetTitle);
+  const season = seasonAlignmentScore(
+    candidateTitle,
+    candidateJp,
+    effectiveSeason,
+    seasonName,
+    allSeasons,
+    "tv",
+    [targetTitle]
+  );
+  return Math.max(0, base + season);
 }
 function findBestAnimeMatch(candidates, meta, season) {
   if (!candidates || candidates.length === 0) return null;
-  const titlesToTry = [
-    meta.seasonName,
+  const effectiveSeason = typeof season === "number" && season > 0 ? season : 1;
+  const baseTitles = [
     meta.title,
     meta.originalTitle,
     ...meta.alternateTitles || []
   ].filter((t) => Boolean(t && t.trim()));
+  const seasonName = meta.seasonName || meta.allSeasons?.find((s) => s.season_number === effectiveSeason)?.name;
   const isMovie = meta.kind === "movie";
   let bestCandidate = null;
   let highestScore = -1;
+  let bestPrimary = null;
+  let highestPrimaryScore = -1;
   for (const item of candidates) {
-    let maxScoreForItem = 0;
-    for (const title of titlesToTry) {
-      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season, meta.allSeasons);
-      if (sc > maxScoreForItem) {
-        maxScoreForItem = sc;
-      }
+    if (!item.id) continue;
+    let baseScore = 0;
+    for (const title of baseTitles) {
+      baseScore = Math.max(baseScore, scoreBaseTitle(item.title, item.jpTitle, title));
     }
+    if (baseScore < 0.3) continue;
+    const seasonAdj = seasonAlignmentScore(
+      item.title,
+      item.jpTitle,
+      effectiveSeason,
+      seasonName,
+      meta.allSeasons,
+      meta.kind,
+      baseTitles
+    );
+    let total = baseScore + seasonAdj;
     const isItemMovie = /\bmovie\b/i.test(item.title) || /\/movie\b/i.test(item.url);
     const isItemOva = /\b(?:ova|ona|special)\b/i.test(item.title) || /\b(?:ova|ona|special)\b/i.test(item.url);
     if (isMovie && !isItemMovie) {
-      maxScoreForItem *= 0.5;
+      total *= 0.5;
     } else if (!isMovie && isItemMovie) {
-      maxScoreForItem *= 0.6;
+      total *= 0.6;
     } else if (!isMovie && isItemOva) {
-      maxScoreForItem *= 0.7;
+      total *= 0.8;
     }
-    if (maxScoreForItem > highestScore) {
-      highestScore = maxScoreForItem;
+    const label = parseSeasonLabel(`${item.title} ${item.jpTitle || ""}`);
+    const isPrimary = isMovie ? isItemMovie : !label.isSpecial && !isItemMovie;
+    if (total > highestScore) {
+      highestScore = total;
       bestCandidate = item;
     }
+    if (isPrimary && total > highestPrimaryScore) {
+      highestPrimaryScore = total;
+      bestPrimary = item;
+    }
   }
-  if (highestScore < 0.35) {
-    return null;
+  if (highestPrimaryScore >= 0.45) {
+    return bestPrimary;
   }
-  return bestCandidate;
-}
-
-// src/matching/seasonMatcher.ts
-async function resolveTargetSeasonAnimeId(baseAnimeId, seasonNumber, seasonName) {
-  const targetSeason = typeof seasonNumber === "number" && seasonNumber > 0 ? seasonNumber : 1;
-  const seasons = await getAnimeSeasons(baseAnimeId);
-  if (!seasons || seasons.length === 0) {
-    return baseAnimeId;
-  }
-  let matched = seasons.find((s) => {
-    const sNum = extractSeasonNumber(s.name);
-    return sNum === targetSeason;
-  });
-  if (!matched && targetSeason === 1) {
-    matched = seasons.find((s) => /\bseason\s*0*1\b/i.test(s.name) || extractSeasonNumber(s.name) === null);
-  }
-  if (!matched && seasonName) {
-    const cleanTarg = cleanTitle(seasonName);
-    matched = seasons.find((s) => {
-      const cleanS = cleanTitle(s.name);
-      return cleanS.includes(cleanTarg) || cleanTarg.includes(cleanS);
-    });
-  }
-  if (!matched) {
-    return baseAnimeId;
-  }
-  if (matched.active) {
-    return baseAnimeId;
-  }
-  const seasonId = await getAnimeIdFromUrl(matched.url);
-  return seasonId || baseAnimeId;
-}
-function resolveTargetEpisode(episodes, episodeNumber, absoluteOffset = 0) {
-  if (!episodes || episodes.length === 0) return null;
-  const targetNum = typeof episodeNumber === "number" && episodeNumber > 0 ? episodeNumber : 1;
-  let ep = episodes.find((e) => e.num === targetNum);
-  if (ep) return ep;
-  if (absoluteOffset > 0) {
-    const absNum = absoluteOffset + targetNum;
-    ep = episodes.find((e) => e.num === absNum);
-    if (ep) return ep;
-  }
-  if (targetNum <= episodes.length) {
-    const posEp = episodes[targetNum - 1];
-    if (posEp) return posEp;
+  if (highestScore >= 0.45) {
+    return bestCandidate;
   }
   return null;
 }
 
-// src/extractors/streamExtractor.ts
+// src/matching/seasonMatcher.ts
+function isRootCandidate(matched, meta) {
+  const rootWords = /* @__PURE__ */ new Set([
+    ...distinctiveWords(meta.title),
+    ...distinctiveWords(meta.originalTitle || "")
+  ]);
+  const matchedWords = [
+    ...distinctiveWords(matched.title),
+    ...distinctiveWords(matched.jpTitle || "")
+  ];
+  if (matchedWords.length === 0) return false;
+  const extra = matchedWords.filter((w) => !rootWords.has(w));
+  return extra.length === 0;
+}
+function isSeasonSpecific(matched, targetSeason, seasonName) {
+  const label = parseSeasonLabel(`${matched.title} ${matched.jpTitle || ""}`);
+  if (targetSeason > 0 && label.season === targetSeason) return true;
+  if (seasonName) {
+    if (coversNamedSeason(matched.title, seasonName)) return true;
+    if (matched.jpTitle && coversNamedSeason(matched.jpTitle, seasonName)) return true;
+  }
+  return false;
+}
+async function resolveCandidateId(item, baseAnimeId) {
+  if (item.active) return baseAnimeId;
+  const id = await getAnimeIdFromUrl(item.url);
+  return id || baseAnimeId;
+}
+async function buildGroupPlan(entries, baseAnimeId, targetEpisode, targetSeason, reason) {
+  if (entries.length === 0) return null;
+  const sorted = entries.slice().sort((a, b) => {
+    const ap = a.label.part ?? a.index + 1;
+    const bp = b.label.part ?? b.index + 1;
+    return ap - bp;
+  });
+  if (targetSeason === 0) {
+    const idx = Math.max(0, Math.min(sorted.length - 1, Math.max(0, targetEpisode) - 1));
+    const chosen = sorted[idx];
+    const animeId = await resolveCandidateId(chosen.item, baseAnimeId);
+    return {
+      animeId,
+      localEpisode: 1,
+      seasonNumber: 0,
+      partNumber: chosen.label.part,
+      continuous: false,
+      reason
+    };
+  }
+  if (sorted.length === 1) {
+    const only = sorted[0];
+    const animeId = await resolveCandidateId(only.item, baseAnimeId);
+    return {
+      animeId,
+      localEpisode: targetEpisode,
+      seasonNumber: targetSeason,
+      partNumber: only.label.part,
+      continuous: false,
+      reason
+    };
+  }
+  const resolved = await Promise.all(sorted.map(async (entry) => {
+    const animeId = await resolveCandidateId(entry.item, baseAnimeId);
+    const episodes = await getEpisodeList(animeId);
+    return { ...entry, id: animeId, episodes };
+  }));
+  let before = 0;
+  for (let i = 0; i < resolved.length; i++) {
+    const entry = resolved[i];
+    const count = entry.episodes.length;
+    const isLast = i === resolved.length - 1;
+    if (targetEpisode <= before + count || isLast) {
+      return {
+        animeId: entry.id,
+        localEpisode: targetEpisode - before,
+        seasonNumber: targetSeason,
+        partNumber: entry.label.part,
+        continuous: false,
+        reason
+      };
+    }
+    before += count;
+  }
+  return null;
+}
+async function planSeasonTarget(options) {
+  const { baseAnimeId, matched, seasons, meta } = options;
+  const targetSeason = options.targetSeason === 0 ? 0 : options.targetSeason > 0 ? options.targetSeason : 1;
+  const targetEpisode = options.targetEpisode;
+  if (meta.kind === "movie") {
+    return {
+      animeId: baseAnimeId,
+      localEpisode: Math.max(1, targetEpisode),
+      seasonNumber: 1,
+      partNumber: null,
+      continuous: false,
+      reason: "movie"
+    };
+  }
+  if (!seasons || seasons.length === 0) {
+    return {
+      animeId: baseAnimeId,
+      localEpisode: null,
+      seasonNumber: targetSeason,
+      partNumber: null,
+      continuous: null,
+      reason: "no-season-list"
+    };
+  }
+  const candidates = seasons.map((item, index) => ({
+    item,
+    label: parseSeasonLabel(item.name),
+    index,
+    id: item.active ? baseAnimeId : "",
+    episodes: []
+  }));
+  const activeEntry = candidates.find((c) => c.item.active);
+  const specials = candidates.filter((c) => c.label.season === 0 || c.label.isSpecial);
+  const namedAll = meta.seasonName ? candidates.filter((c) => coversNamedSeason(c.item.name, meta.seasonName)) : [];
+  const ordinalAll = targetSeason > 0 ? candidates.filter((c) => c.label.season === targetSeason) : [];
+  const preferTv = (entries) => {
+    const tv = entries.filter((c) => !c.label.isMovie && !c.label.isSpecial);
+    return tv.length > 0 ? tv : entries;
+  };
+  const named = preferTv(namedAll);
+  const ordinal = preferTv(ordinalAll);
+  const hasParts = ordinal.some((c) => c.label.part !== null);
+  if (targetSeason === 0) {
+    if (specials.length > 0) {
+      return buildGroupPlan(specials, baseAnimeId, targetEpisode, 0, "specials");
+    }
+    const matchedLabel = parseSeasonLabel(`${matched.title} ${matched.jpTitle || ""}`);
+    if (matchedLabel.isSpecial) {
+      return {
+        animeId: baseAnimeId,
+        localEpisode: targetEpisode,
+        seasonNumber: 0,
+        partNumber: matchedLabel.part,
+        continuous: false,
+        reason: "matched-special"
+      };
+    }
+    return null;
+  }
+  if (isSeasonSpecific(matched, targetSeason, meta.seasonName)) {
+    const group = named.length > 0 ? named : ordinal.length > 0 ? ordinal : candidates.filter((c) => c.item.active);
+    return buildGroupPlan(group, baseAnimeId, targetEpisode, targetSeason, "matched-season");
+  }
+  if (targetSeason === 1 && isRootCandidate(matched, meta) && activeEntry && !hasParts) {
+    return {
+      animeId: baseAnimeId,
+      localEpisode: targetEpisode,
+      seasonNumber: 1,
+      partNumber: null,
+      continuous: false,
+      reason: "active-root-season-1"
+    };
+  }
+  if (named.length > 0) {
+    return buildGroupPlan(named, baseAnimeId, targetEpisode, targetSeason, "named-season");
+  }
+  if (ordinal.length > 0) {
+    return buildGroupPlan(ordinal, baseAnimeId, targetEpisode, targetSeason, "ordinal-season");
+  }
+  if (!isRootCandidate(matched, meta)) {
+    return {
+      animeId: baseAnimeId,
+      localEpisode: targetEpisode,
+      seasonNumber: targetSeason,
+      partNumber: null,
+      continuous: false,
+      reason: "distinct-entry-fallback"
+    };
+  }
+  if (targetSeason === 1) {
+    return {
+      animeId: baseAnimeId,
+      localEpisode: targetEpisode,
+      seasonNumber: 1,
+      partNumber: null,
+      continuous: false,
+      reason: "root-season-1"
+    };
+  }
+  return null;
+}
+async function resolveTargetSeasonAnimeId(baseAnimeId, seasonNumber, seasonName, targetEpisode = 1) {
+  const seasons = await getAnimeSeasons(baseAnimeId);
+  const plan = await planSeasonTarget({
+    baseAnimeId,
+    matched: { id: baseAnimeId, url: "", title: "" },
+    seasons,
+    meta: {
+      numericId: baseAnimeId,
+      kind: "tv",
+      title: "",
+      alternateTitles: [],
+      absoluteOffset: 0,
+      seasonName
+    },
+    targetSeason: typeof seasonNumber === "number" && seasonNumber >= 0 ? seasonNumber : 1,
+    targetEpisode
+  });
+  return plan?.animeId || baseAnimeId;
+}
+function resolveTargetEpisode(episodes, episodeNumber, absoluteOffset = 0, options = {}) {
+  if (!episodes || episodes.length === 0) return null;
+  const rawTarget = typeof episodeNumber === "number" && !isNaN(episodeNumber) ? episodeNumber : 1;
+  const targetNum = options.allowZero === false ? Math.max(1, rawTarget) : Math.max(0, rawTarget);
+  const allowZero = options.allowZero !== false;
+  if (options.continuous) {
+    if (absoluteOffset > 0 && allowZero) {
+      const absoluteEpisode = episodes.find((e) => e.num === absoluteOffset + targetNum);
+      if (absoluteEpisode) return absoluteEpisode;
+    }
+    const direct = episodes.find((e) => e.num === targetNum);
+    if (direct) return direct;
+  } else {
+    const direct = episodes.find((e) => e.num === targetNum);
+    if (direct) return direct;
+    if (!options.local && absoluteOffset > 0) {
+      const absoluteEpisode = episodes.find((e) => e.num === absoluteOffset + targetNum);
+      if (absoluteEpisode) return absoluteEpisode;
+    }
+  }
+  if (episodes.length === 1 && targetNum >= 1) {
+    return episodes[0];
+  }
+  return null;
+}
+function isContinuousNumbering(episodes, meta) {
+  if (!episodes || episodes.length === 0 || !meta) return false;
+  const maxEpisode = Math.max(...episodes.map((e) => e.num));
+  const totalEpisodes = meta.totalEpisodes || 0;
+  const seasonEpisodeCount = meta.seasonEpisodeCount || 0;
+  if (totalEpisodes <= 0) return false;
+  if (Math.abs(maxEpisode - totalEpisodes) > 2) return false;
+  return seasonEpisodeCount === 0 || maxEpisode > seasonEpisodeCount + 2;
+}
+
+// src/api/kitsuResolver.ts
 var UA3 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var cache = /* @__PURE__ */ new Map();
+function titleScore(candidate, target) {
+  const c = cleanTitle(candidate);
+  const t = cleanTitle(target);
+  if (!c || !t) return 0;
+  if (c === t) return 1;
+  let best = 0;
+  if (c.startsWith(t) || t.startsWith(c)) {
+    const ratio = Math.min(c.length, t.length) / Math.max(c.length, t.length);
+    best = Math.max(best, 0.8 * ratio);
+  }
+  if (c.includes(t) || t.includes(c)) {
+    const ratio = Math.min(c.length, t.length) / Math.max(c.length, t.length);
+    best = Math.max(best, 0.7 * ratio);
+  }
+  const targetWords = distinctiveWords(t);
+  if (targetWords.length > 0) {
+    const candidateWords = new Set(distinctiveWords(c));
+    let matched = 0;
+    for (const w of targetWords) if (candidateWords.has(w)) matched++;
+    if (matched / targetWords.length >= 0.8) best = Math.max(best, 0.8);
+  }
+  return Math.max(best, computeDiceScore(c, t));
+}
+function pickBestTmdbResult(results, kitsu) {
+  const titles = [kitsu.canonicalTitle, ...kitsu.titles].filter(Boolean);
+  const startYear = kitsu.startDate ? parseInt(kitsu.startDate.slice(0, 4), 10) : null;
+  let best = null;
+  let bestScore = 0;
+  for (const result of results) {
+    const name = String(result.name || result.title || "");
+    const original = String(result.original_name || result.original_title || "");
+    let score = 0;
+    for (const title of titles) {
+      score = Math.max(score, titleScore(name, title), titleScore(original, title));
+    }
+    const dateValue = String(result.first_air_date || result.release_date || "");
+    const resultYear = dateValue ? parseInt(dateValue.slice(0, 4), 10) : null;
+    if (startYear && resultYear) {
+      const delta = Math.abs(resultYear - startYear);
+      if (delta <= 1) score += 0.15;
+      else if (delta > 3) score -= 0.2;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = result;
+    }
+  }
+  return bestScore >= 0.45 ? best : null;
+}
+async function fetchKitsuAnime(kitsuId) {
+  try {
+    const res = await fetchWithTimeout(
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}`,
+      { headers: { Accept: "application/vnd.api+json", "User-Agent": UA3 } },
+      4e3
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const attr = data.data?.attributes;
+    if (!attr) return null;
+    const titles = Object.values(attr.titles || {}).concat(attr.abbreviatedTitles || []).filter((t) => Boolean(t && typeof t === "string")).map((t) => decodeHtmlEntities(t));
+    return {
+      id: String(data.data.id),
+      subtype: String(attr.subtype || "").toLowerCase(),
+      episodeCount: Number(attr.episodeCount || 0),
+      startDate: attr.startDate || void 0,
+      canonicalTitle: decodeHtmlEntities(attr.canonicalTitle || titles[0] || ""),
+      originalTitle: attr.titles?.ja_jp ? decodeHtmlEntities(attr.titles.ja_jp) : void 0,
+      titles
+    };
+  } catch {
+    return null;
+  }
+}
+async function searchTmdb(kitsu, kind) {
+  const queries = [kitsu.canonicalTitle, ...kitsu.titles].filter((q) => Boolean(q && q.trim()));
+  for (const query of [...new Set(queries)].slice(0, 5)) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`,
+        { headers: { "User-Agent": UA3 } },
+        4e3
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      const best = pickBestTmdbResult(data.results || [], kitsu);
+      if (best) return best;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+async function mapByAirDate(tmdbId, startDate) {
+  if (!startDate) return null;
+  const start = Date.parse(startDate);
+  if (isNaN(start)) return null;
+  try {
+    const showRes = await fetchWithTimeout(
+      `https://api.themoviedb.org/3/tv/${encodeURIComponent(tmdbId)}?api_key=${TMDB_API_KEY}`,
+      { headers: { "User-Agent": UA3 } },
+      4e3
+    );
+    if (!showRes.ok) return null;
+    const show = await showRes.json();
+    const seasons = (show.seasons || []).filter((s) => s.season_number > 0 && s.air_date).sort(
+      (a, b) => Math.abs(Date.parse(a.air_date) - start) - Math.abs(Date.parse(b.air_date) - start)
+    ).slice(0, 3);
+    let best = null;
+    for (const season of seasons) {
+      try {
+        const seasonRes = await fetchWithTimeout(
+          `https://api.themoviedb.org/3/tv/${encodeURIComponent(tmdbId)}/season/${season.season_number}?api_key=${TMDB_API_KEY}`,
+          { headers: { "User-Agent": UA3 } },
+          4e3
+        );
+        if (!seasonRes.ok) continue;
+        const seasonData = await seasonRes.json();
+        for (const episode of seasonData.episodes || []) {
+          if (!episode.air_date || !episode.episode_number) continue;
+          const delta = Math.abs(Date.parse(episode.air_date) - start);
+          if (!best || delta < best.delta) {
+            best = { season: season.season_number, episode: episode.episode_number, delta };
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (best && best.delta <= 14 * 864e5) {
+      return { season: best.season, episodeOffset: best.episode - 1 };
+    }
+    if (seasons.length > 0) {
+      return { season: seasons[0].season_number, episodeOffset: 0 };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+async function resolveKitsuEntry(kitsuId, mediaType, incomingSeason) {
+  if (!kitsuId) return null;
+  const cacheKey = `${kitsuId}:${mediaType}:${incomingSeason}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey) || null;
+  const kitsu = await fetchKitsuAnime(kitsuId);
+  if (!kitsu) {
+    cache.set(cacheKey, null);
+    return null;
+  }
+  const kind = mediaType === "movie" || kitsu.subtype === "movie" ? "movie" : "tv";
+  const tmdb = await searchTmdb(kitsu, kind);
+  if (!tmdb) {
+    cache.set(cacheKey, null);
+    return null;
+  }
+  const tmdbId = String(tmdb.id);
+  const base = {
+    tmdbId,
+    kind,
+    season: 1,
+    episodeOffset: 0,
+    title: kitsu.canonicalTitle,
+    originalTitle: kitsu.originalTitle,
+    alternateTitles: [...new Set([...kitsu.titles, kitsu.canonicalTitle].filter(Boolean))]
+  };
+  if (kind === "movie") {
+    cache.set(cacheKey, base);
+    return base;
+  }
+  if (incomingSeason > 1) {
+    const resolved2 = { ...base, season: incomingSeason };
+    cache.set(cacheKey, resolved2);
+    return resolved2;
+  }
+  if (kitsu.episodeCount > 100) {
+    cache.set(cacheKey, base);
+    return base;
+  }
+  const labels = [kitsu.canonicalTitle, ...kitsu.titles].map((t) => parseSeasonLabel(t));
+  const titleSeason = labels.map((l) => l.season).filter((s) => typeof s === "number" && s > 1).sort((a, b) => b - a)[0];
+  const titlePart = labels.map((l) => l.part).filter((p) => typeof p === "number" && p > 1).sort((a, b) => b - a)[0];
+  if (titleSeason) {
+    if (titlePart) {
+      const mapped2 = await mapByAirDate(tmdbId, kitsu.startDate);
+      const resolved3 = {
+        ...base,
+        season: titleSeason,
+        episodeOffset: mapped2 && mapped2.season === titleSeason ? mapped2.episodeOffset : 0
+      };
+      cache.set(cacheKey, resolved3);
+      return resolved3;
+    }
+    const resolved2 = { ...base, season: titleSeason };
+    cache.set(cacheKey, resolved2);
+    return resolved2;
+  }
+  const mapped = await mapByAirDate(tmdbId, kitsu.startDate);
+  const resolved = {
+    ...base,
+    season: mapped?.season || 1,
+    episodeOffset: mapped?.episodeOffset || 0
+  };
+  cache.set(cacheKey, resolved);
+  return resolved;
+}
+
+// src/extractors/streamExtractor.ts
+var UA4 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 var U = "i?LMTAx0Q6,:}50U";
 var S = "W0;27ToaUpl_P%'c";
 function W(str, len) {
@@ -663,7 +1199,7 @@ async function resolveStreamFromServer(server) {
     if (!playerUrl) return null;
     const playerRes = await fetchWithTimeout(playerUrl, {
       headers: {
-        "User-Agent": UA3,
+        "User-Agent": UA4,
         "Referer": "https://anikoto.cz/"
       }
     }, 2e3);
@@ -678,7 +1214,7 @@ async function resolveStreamFromServer(server) {
     const gsUrl = `${playerOrigin}/stream/getSourcesNew?id=${playerStreamId}&s=${encodeURIComponent(sParam)}`;
     const gsRes = await fetchWithTimeout(gsUrl, {
       headers: {
-        "User-Agent": UA3,
+        "User-Agent": UA4,
         "Referer": playerUrl,
         "X-Requested-With": "XMLHttpRequest"
       }
@@ -696,7 +1232,7 @@ async function resolveStreamFromServer(server) {
     }
     const subtitles = (gsJson.tracks || []).filter((t) => Boolean(t.file)).map((t) => ({
       url: t.file,
-      language: normalizeSubtitleLang2(t.label || "English"),
+      language: normalizeSubtitleLang(t.label || "English"),
       name: t.label || "English",
       headers: {
         "Referer": `${playerOrigin}/`,
@@ -727,40 +1263,98 @@ async function resolveStreamFromServer(server) {
 }
 
 // src/index.ts
+function buildSearchQueries(meta) {
+  const extraSubqueries = [];
+  if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
+  if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
+  if (meta.originalTitle && meta.originalTitle.includes(":")) {
+    extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
+  }
+  if (meta.seasonName && meta.seasonName.includes(":")) {
+    extraSubqueries.push(meta.seasonName.split(":")[0].trim());
+  }
+  return [
+    meta.title,
+    meta.originalTitle,
+    meta.seasonName,
+    ...extraSubqueries,
+    ...meta.alternateTitles || []
+  ].filter((t) => Boolean(t && t.trim()));
+}
+async function resolveMetadata(rawId, mediaType, isKitsu, cleanId, targetSeason, targetEpisode) {
+  if (isKitsu) {
+    const kitsu = await resolveKitsuEntry(cleanId, mediaType, targetSeason);
+    if (kitsu) {
+      const season2 = kitsu.season;
+      const episode = kitsu.episodeOffset + targetEpisode;
+      const tmdbMeta = await getTmdbMetadata(kitsu.tmdbId, kitsu.kind, season2, episode);
+      if (tmdbMeta) {
+        return {
+          meta: {
+            ...tmdbMeta,
+            title: kitsu.title || tmdbMeta.title,
+            originalTitle: kitsu.originalTitle || tmdbMeta.originalTitle,
+            alternateTitles: [...new Set([
+              kitsu.title,
+              ...kitsu.alternateTitles,
+              tmdbMeta.title,
+              tmdbMeta.originalTitle || "",
+              ...tmdbMeta.alternateTitles
+            ].filter(Boolean))],
+            resolvedSeason: season2
+          },
+          season: season2,
+          episode
+        };
+      }
+    }
+  }
+  const meta = await getTmdbMetadata(rawId, mediaType, targetSeason, targetEpisode);
+  let season = targetSeason;
+  if (meta && typeof meta.resolvedSeason === "number" && meta.resolvedSeason > 0) {
+    season = meta.resolvedSeason;
+  }
+  return { meta, season, episode: targetEpisode };
+}
 async function getStreams(tmdbId, mediaType = "tv", season, episode) {
   try {
     if (!tmdbId) return [];
     const idInfo = parseIncomingId(tmdbId, season, episode);
-    const targetSeason = idInfo.season;
-    const targetEpisode = idInfo.episode;
+    const incomingEpisode = idInfo.episode;
+    let targetSeason = idInfo.season;
+    let targetEpisode = idInfo.episode;
+    let kitsuOffset = 0;
     let seasonAnimeId = "";
     let absoluteOffset = 0;
+    let meta = null;
+    let plan = null;
+    let seasonList = [];
+    let matchedAnimeId = "";
     if (idInfo.isAnikoto) {
       seasonAnimeId = idInfo.cleanId;
     } else {
-      const meta = await getTmdbMetadata(tmdbId, mediaType, targetSeason, targetEpisode);
-      if (!meta || !meta.title) {
-        return [];
+      const resolved2 = await resolveMetadata(
+        tmdbId,
+        mediaType,
+        idInfo.isKitsu,
+        idInfo.cleanId,
+        targetSeason,
+        targetEpisode
+      );
+      meta = resolved2.meta;
+      targetSeason = resolved2.season;
+      targetEpisode = resolved2.episode;
+      if (idInfo.isKitsu) {
+        kitsuOffset = Math.max(0, resolved2.episode - incomingEpisode);
       }
-      absoluteOffset = meta.absoluteOffset;
-      const extraSubqueries = [];
-      if (meta.title.includes(":")) extraSubqueries.push(meta.title.split(":")[0].trim());
-      if (meta.title.includes("-")) extraSubqueries.push(meta.title.split("-")[0].trim());
-      if (meta.originalTitle && meta.originalTitle.includes(":")) extraSubqueries.push(meta.originalTitle.split(":")[0].trim());
-      if (meta.seasonName && meta.seasonName.includes(":")) extraSubqueries.push(meta.seasonName.split(":")[0].trim());
-      const searchQueries = [
-        meta.seasonName,
-        meta.title,
-        meta.originalTitle,
-        ...extraSubqueries,
-        ...meta.alternateTitles || []
-      ].filter((t) => Boolean(t && t.trim()));
+      if (!meta || !meta.title) return [];
+      const searchQueries = buildSearchQueries(meta);
       const uniqueQueries = [...new Set(searchQueries)].slice(0, 4);
       const queryResults = await Promise.all(uniqueQueries.map((q) => searchAnikoto(q)));
       const candidateMap = /* @__PURE__ */ new Map();
       for (const list of queryResults) {
         for (const item of list) {
-          if (!candidateMap.has(item.id)) {
+          if (item.id && !candidateMap.has(item.id)) {
             candidateMap.set(item.id, item);
           }
         }
@@ -769,15 +1363,60 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
       if (candidates.length === 0) return [];
       const matchedAnime = findBestAnimeMatch(candidates, meta, targetSeason);
       if (!matchedAnime || !matchedAnime.id) return [];
-      seasonAnimeId = await resolveTargetSeasonAnimeId(
-        matchedAnime.id,
+      matchedAnimeId = matchedAnime.id;
+      const seasons = await getAnimeSeasons(matchedAnime.id);
+      seasonList = seasons;
+      plan = await planSeasonTarget({
+        baseAnimeId: matchedAnime.id,
+        matched: matchedAnime,
+        seasons,
+        meta,
         targetSeason,
-        meta.seasonName
-      );
+        targetEpisode
+      });
+      if (!plan || !plan.animeId) return [];
+      seasonAnimeId = plan.animeId;
+      if (plan.localEpisode !== null) {
+        targetEpisode = plan.localEpisode;
+        absoluteOffset = 0;
+      } else {
+        absoluteOffset = meta.absoluteOffset;
+      }
     }
     const episodes = await getEpisodeList(seasonAnimeId);
     if (!episodes || episodes.length === 0) return [];
-    const matchedEp = resolveTargetEpisode(episodes, targetEpisode, absoluteOffset);
+    const localToSeason = idInfo.isAnikoto || Boolean(plan && plan.localEpisode !== null);
+    const continuous = localToSeason ? false : isContinuousNumbering(episodes, meta);
+    let matchedEp = resolveTargetEpisode(episodes, targetEpisode, absoluteOffset, {
+      continuous,
+      allowZero: true,
+      local: localToSeason
+    });
+    if (!matchedEp && !idInfo.isAnikoto && kitsuOffset > 0) {
+      const localKitsuEpisode = resolveTargetEpisode(episodes, incomingEpisode, 0, {
+        allowZero: true,
+        local: true
+      });
+      if (localKitsuEpisode) matchedEp = localKitsuEpisode;
+    }
+    if (!matchedEp && !idInfo.isAnikoto && seasonList.length > 0) {
+      const nextSeason = seasonList.find((s) => {
+        const label = parseSeasonLabel(s.name);
+        return label.season === targetSeason + 1 && !label.isSpecial && !label.isMovie;
+      });
+      if (nextSeason) {
+        const nextId = nextSeason.active ? matchedAnimeId : await getAnimeIdFromUrl(nextSeason.url) || matchedAnimeId;
+        const nextEpisodes = await getEpisodeList(nextId);
+        const overflowEpisode = targetEpisode - episodes.length;
+        if (overflowEpisode > 0) {
+          const nextEp = resolveTargetEpisode(nextEpisodes, overflowEpisode, 0, {
+            allowZero: true,
+            local: true
+          });
+          if (nextEp) matchedEp = nextEp;
+        }
+      }
+    }
     if (!matchedEp || !matchedEp.dataIds) return [];
     const rawServers = await getServerList(matchedEp.dataIds);
     if (!rawServers || rawServers.length === 0) return [];
@@ -789,10 +1428,8 @@ async function getStreams(tmdbId, mediaType = "tv", season, episode) {
       return 0;
     });
     const servers = prioritized.slice(0, 3);
-    const streamPromises = servers.map((s) => resolveStreamFromServer(s));
-    const resolved = await Promise.all(streamPromises);
-    const streams = resolved.filter((s) => Boolean(s && s.url));
-    return streams;
+    const resolved = await Promise.all(servers.map((s) => resolveStreamFromServer(s)));
+    return resolved.filter((s) => Boolean(s && s.url));
   } catch (err) {
     console.warn("[Anikoto] getStreams failed:", err?.message || err);
     return [];

@@ -43,41 +43,98 @@ export function computeDiceScore(s1: string, s2: string): number {
   return (2 * intersection) / (wordsA.length + wordsB.length);
 }
 
-export function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs: number = 3000): Promise<Response> {
+export function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs: number = 4000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(id));
 }
 
+export interface ParsedSeasonLabel {
+  season: number | null;
+  part: number | null;
+  isSpecial: boolean;
+  isMovie: boolean;
+  isFinalSeason: boolean;
+}
+
+const SEASON_STOP_WORDS = new Set([
+  "season", "seasons", "part", "parts", "cour", "cours", "the", "a", "an",
+  "of", "and", "to", "in", "on", "for", "with", "ver", "version", "tv",
+  "arc", "special", "specials", "movie", "movies", "film", "films", "final",
+  "story", "chapter", "volume", "no", "wa", "ga", "ni", "de", "wo", "ova",
+  "ona", "recap", "picture", "drama", "mini", "anime", "half"
+]);
+
+export function parseSeasonLabel(title: string): ParsedSeasonLabel {
+  const raw = decodeHtmlEntities(String(title || "")).trim();
+  const lower = raw.toLowerCase();
+
+  const isSpecial = /\b(specials?|ova|onas?|recap|picture drama|mini anime)\b/i.test(lower);
+  const isMovie = /\b(movies?|films?)\b/i.test(lower);
+  const isFinalSeason = /\bfinal season\b/i.test(lower);
+
+  let season: number | null = null;
+  let part: number | null = null;
+
+  // "Season 2", "Season 02"
+  const mSeason = lower.match(/\bseason\s*0*(\d+)\b/i);
+  if (mSeason) season = parseInt(mSeason[1], 10);
+
+  // "2nd Season", "3rd Season"
+  if (season === null) {
+    const mNth = lower.match(/\b0*(\d+)\s*(?:st|nd|rd|th)\s*season\b/i);
+    if (mNth) season = parseInt(mNth[1], 10);
+  }
+
+  // "S2" (standalone token)
+  if (season === null) {
+    const mS = lower.match(/\bs0*(\d+)\b/i);
+    if (mS) season = parseInt(mS[1], 10);
+  }
+
+  // Roman numerals: II, III, IV, V, VI (avoid isolated I)
+  if (season === null) {
+    const mRoman = raw.match(/\b(VI|V|IV|III|II)\b/);
+    if (mRoman) {
+      const map: Record<string, number> = { II: 2, III: 3, IV: 4, V: 5, VI: 6 };
+      season = map[mRoman[1].toUpperCase()] ?? null;
+    }
+  }
+
+  // Trailing season digit: "KonoSuba 2" (never "Part 2")
+  if (season === null) {
+    const mTrail = raw.match(/\s+([2-9])$/);
+    if (mTrail && !/\b(?:part|cour)\s*[2-9]\s*$/i.test(raw)) {
+      season = parseInt(mTrail[1], 10);
+    }
+  }
+
+  // "Part 2", "Cour 2" are parts, never seasons
+  const mPart = lower.match(/\b(?:part|cour)\s*0*(\d+)\b/i);
+  if (mPart) part = parseInt(mPart[1], 10);
+
+  return { season, part, isSpecial, isMovie, isFinalSeason };
+}
+
 export function extractSeasonNumber(title: string): number | null {
-  if (!title) return null;
-  const t = title.trim();
+  return parseSeasonLabel(title).season;
+}
 
-  // 1. Explicit Season words: "Season 2", "2nd Season", "S2", "Part 2"
-  const m1 = t.match(/\b(?:season\s*(\d+)|(\d+)(?:nd|rd|th|st)\s*season|\bs(\d+)\b|part\s*(\d+))/i);
-  if (m1) {
-    const num = m1[1] || m1[2] || m1[3] || m1[4];
-    if (num) return parseInt(num, 10);
-  }
+export function distinctiveWords(text: string): string[] {
+  return cleanTitle(text)
+    .split(" ")
+    .filter(w => w.length >= 3 && !SEASON_STOP_WORDS.has(w));
+}
 
-  // 2. Roman Numerals: II, III, IV, V, VI (avoids isolated I)
-  const mRoman = t.match(/\b(VI|V|IV|III|II)\b/i);
-  if (mRoman) {
-    const r = mRoman[1].toUpperCase();
-    if (r === "II") return 2;
-    if (r === "III") return 3;
-    if (r === "IV") return 4;
-    if (r === "V") return 5;
-    if (r === "VI") return 6;
-  }
-
-  // 3. Trailing season digit: "KonoSuba 2", "Noragami 2", "Blue Exorcist 2"
-  const mTrail = t.match(/\s+([2-9])$/);
-  if (mTrail) {
-    return parseInt(mTrail[1], 10);
-  }
-
-  return null;
+export function coversNamedSeason(candidate: string, seasonName?: string): boolean {
+  if (!candidate || !seasonName) return false;
+  const targetWords = distinctiveWords(seasonName);
+  if (targetWords.length === 0) return false;
+  const candidateWords = new Set(distinctiveWords(candidate));
+  if (candidateWords.size === 0) return false;
+  let matched = 0;
+  for (const w of targetWords) if (candidateWords.has(w)) matched++;
+  return matched / targetWords.length >= 0.6;
 }
 
 const LANG_MAP: Record<string, string> = {

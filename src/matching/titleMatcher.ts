@@ -1,37 +1,106 @@
 import { AnikotoSearchResult, TMDBMetadata } from "../types";
-import { cleanTitle, computeDiceScore, extractSeasonNumber } from "../utils/textUtils";
+import { cleanTitle, computeDiceScore, coversNamedSeason, distinctiveWords, parseSeasonLabel } from "../utils/textUtils";
 
-function matchesNamedSeason(
-  candTitle: string,
-  candJp: string | undefined,
-  seasonName: string
-): boolean {
-  for (const cand of [candTitle, candJp]) {
-    if (!cand) continue;
-    const cClean = cleanTitle(cand);
-    const sClean = cleanTitle(seasonName);
-    if (!cClean || !sClean) continue;
+export function scoreBaseTitle(
+  candidateTitle: string,
+  candidateJp: string | undefined,
+  targetTitle: string
+): number {
+  const target = cleanTitle(targetTitle);
+  if (!target) return 0;
 
-    if (cClean === sClean) return true;
+  const candidates = [cleanTitle(candidateTitle), candidateJp ? cleanTitle(candidateJp) : ""].filter(Boolean);
+  let best = 0;
 
-    const cWords = cClean.split(" ").filter(Boolean);
-    const sWords = sClean.split(" ").filter(Boolean);
-    if (sWords.length === 0 || cWords.length === 0) continue;
-
-    const cSet = new Set(cWords);
-    let matchedInS = 0;
-    for (const w of sWords) {
-      if (cSet.has(w)) matchedInS++;
+  for (const cand of candidates) {
+    if (cand === target) {
+      best = Math.max(best, 1);
+      continue;
     }
-    const sCoverage = matchedInS / sWords.length;
-    const cCoverage = matchedInS / cWords.length;
 
-    // The candidate must contain the distinctive words of the named season
-    if (sCoverage >= 0.85 && cCoverage >= 0.6) {
-      return true;
+    if (cand.startsWith(target) || target.startsWith(cand)) {
+      const ratio = Math.min(cand.length, target.length) / Math.max(cand.length, target.length);
+      best = Math.max(best, 0.8 * ratio);
+    } else if (cand.includes(target) || target.includes(cand)) {
+      const ratio = Math.min(cand.length, target.length) / Math.max(cand.length, target.length);
+      best = Math.max(best, 0.65 * ratio);
+    }
+
+    const targetWords = distinctiveWords(target);
+    if (targetWords.length > 0) {
+      const candWords = new Set(distinctiveWords(cand));
+      let matched = 0;
+      for (const w of targetWords) if (candWords.has(w)) matched++;
+      const coverage = matched / targetWords.length;
+      if (coverage >= 0.8) {
+        best = Math.max(best, 0.7 + 0.1 * coverage);
+      }
+    }
+
+    best = Math.max(best, computeDiceScore(cand, target));
+  }
+
+  return Math.min(1, best);
+}
+
+export function seasonAlignmentScore(
+  candidateTitle: string,
+  candidateJp: string | undefined,
+  targetSeason: number,
+  seasonName?: string,
+  allSeasons?: Array<{ season_number: number; name: string }>,
+  kind: "tv" | "movie" = "tv",
+  baseTitles?: string[]
+): number {
+  const label = parseSeasonLabel(`${candidateTitle} ${candidateJp || ""}`);
+  const effectiveSeason = targetSeason > 0 ? targetSeason : 1;
+  let score = 0;
+
+  const seasonWords = distinctiveWords(seasonName || "");
+  const baseWords = new Set((baseTitles || []).flatMap(t => distinctiveWords(t)));
+  const seasonIsBaseTitle =
+    seasonWords.length > 0 && seasonWords.every(w => baseWords.has(w));
+  const effectiveSeasonName = seasonIsBaseTitle ? undefined : seasonName;
+
+  if (effectiveSeasonName && (coversNamedSeason(candidateTitle, effectiveSeasonName) || coversNamedSeason(candidateJp || "", effectiveSeasonName))) {
+    score += 0.6;
+  } else if (effectiveSeasonName && allSeasons && allSeasons.length > 0) {
+    for (const s of allSeasons) {
+      if (s.season_number > 0 && s.name && s.season_number !== effectiveSeason) {
+        if (coversNamedSeason(candidateTitle, s.name) || coversNamedSeason(candidateJp || "", s.name)) {
+          score -= 0.3;
+          break;
+        }
+      }
     }
   }
-  return false;
+
+  if (label.season !== null) {
+    if (label.season === effectiveSeason) {
+      score += 0.25;
+    } else {
+      score -= 0.5;
+    }
+  } else if (effectiveSeason === 1) {
+    score += 0.1;
+  }
+
+  if (label.isFinalSeason) {
+    const finalSeason = (allSeasons || []).find(s => s.season_number > 0 && /\bfinal\b/i.test(s.name));
+    if (finalSeason) {
+      score += finalSeason.season_number === effectiveSeason ? 0.2 : -0.3;
+    }
+  }
+
+  if (label.isSpecial && effectiveSeason > 0 && !/\bspecial/i.test(seasonName || "")) {
+    score -= 0.35;
+  }
+
+  if (label.isMovie && kind !== "movie") {
+    score -= 0.5;
+  }
+
+  return score;
 }
 
 export function scoreTitleMatch(
@@ -41,72 +110,19 @@ export function scoreTitleMatch(
   targetSeason?: number,
   allSeasons?: Array<{ season_number: number; name: string }>
 ): number {
-  const cNorm = cleanTitle(candidateTitle);
-  const jNorm = candidateJp ? cleanTitle(candidateJp) : "";
-  const tNorm = cleanTitle(targetTitle);
-
-  if (!cNorm && !jNorm) return 0;
-  if (!tNorm) return 0;
-
-  // 1. Direct exact match check
-  let score = 0;
-  if (cNorm === tNorm || jNorm === tNorm) {
-    score = 1.0;
-  } else {
-    for (const cand of [cNorm, jNorm]) {
-      if (!cand) continue;
-      if (cand === tNorm) {
-        score = Math.max(score, 1.0);
-        continue;
-      }
-      if (cand.startsWith(tNorm) || tNorm.startsWith(cand)) {
-        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-        score = Math.max(score, 0.8 * ratio);
-      } else if (cand.includes(tNorm) || tNorm.includes(cand)) {
-        const ratio = Math.min(cand.length, tNorm.length) / Math.max(cand.length, tNorm.length);
-        score = Math.max(score, 0.65 * ratio);
-      } else {
-        score = Math.max(score, computeDiceScore(cand, tNorm));
-      }
-    }
-  }
-
-  // 2. Strict season alignment penalty and boost from explicit numbers
-  const candSeason = extractSeasonNumber(candidateTitle) || (candidateJp ? extractSeasonNumber(candidateJp) : null);
   const effectiveSeason = (typeof targetSeason === "number" && targetSeason > 0) ? targetSeason : 1;
-
-  if (effectiveSeason === 1) {
-    // When Season 1 is requested, penalize any candidate that explicitly specifies Season 2+
-    if (candSeason !== null && candSeason > 1) {
-      score -= 0.6;
-    } else if (candSeason === null && score >= 0.4) {
-      score += 0.2;
-    }
-  } else {
-    // When Season 2+ is requested, boost the matching season and heavily penalize mismatches
-    if (candSeason === effectiveSeason) {
-      score += 0.4;
-    } else if (candSeason !== null && candSeason !== effectiveSeason) {
-      score -= 0.6;
-    }
-  }
-
-  // 3. Named season alignment check from TMDB seasons metadata (e.g. "Descending Stories" is Season 2!)
-  if (allSeasons && allSeasons.length > 0) {
-    for (const s of allSeasons) {
-      if (s.season_number > 0 && s.name) {
-        if (matchesNamedSeason(candidateTitle, candidateJp, s.name)) {
-          if (s.season_number === effectiveSeason) {
-            score += 0.5; // Matches the exact named season from TMDB!
-          } else {
-            score -= 0.8; // Belongs to a different season! Disqualify!
-          }
-        }
-      }
-    }
-  }
-
-  return Math.max(0, score);
+  const seasonName = allSeasons?.find(s => s.season_number === effectiveSeason)?.name;
+  const base = scoreBaseTitle(candidateTitle, candidateJp, targetTitle);
+  const season = seasonAlignmentScore(
+    candidateTitle,
+    candidateJp,
+    effectiveSeason,
+    seasonName,
+    allSeasons,
+    "tv",
+    [targetTitle]
+  );
+  return Math.max(0, base + season);
 }
 
 export function findBestAnimeMatch(
@@ -116,47 +132,75 @@ export function findBestAnimeMatch(
 ): AnikotoSearchResult | null {
   if (!candidates || candidates.length === 0) return null;
 
-  const titlesToTry = [
-    meta.seasonName,
+  const effectiveSeason = (typeof season === "number" && season > 0) ? season : 1;
+  const baseTitles = [
     meta.title,
     meta.originalTitle,
     ...(meta.alternateTitles || [])
   ].filter((t): t is string => Boolean(t && t.trim()));
 
+  const seasonName =
+    meta.seasonName ||
+    meta.allSeasons?.find(s => s.season_number === effectiveSeason)?.name;
+
   const isMovie = meta.kind === "movie";
   let bestCandidate: AnikotoSearchResult | null = null;
   let highestScore = -1;
+  let bestPrimary: AnikotoSearchResult | null = null;
+  let highestPrimaryScore = -1;
 
   for (const item of candidates) {
-    let maxScoreForItem = 0;
-    for (const title of titlesToTry) {
-      const sc = scoreTitleMatch(item.title, item.jpTitle, title, season, meta.allSeasons);
-      if (sc > maxScoreForItem) {
-        maxScoreForItem = sc;
-      }
+    if (!item.id) continue;
+
+    let baseScore = 0;
+    for (const title of baseTitles) {
+      baseScore = Math.max(baseScore, scoreBaseTitle(item.title, item.jpTitle, title));
     }
 
-    // Media type heuristics
+    if (baseScore < 0.3) continue;
+
+    const seasonAdj = seasonAlignmentScore(
+      item.title,
+      item.jpTitle,
+      effectiveSeason,
+      seasonName,
+      meta.allSeasons,
+      meta.kind,
+      baseTitles
+    );
+
+    let total = baseScore + seasonAdj;
+
     const isItemMovie = /\bmovie\b/i.test(item.title) || /\/movie\b/i.test(item.url);
     const isItemOva = /\b(?:ova|ona|special)\b/i.test(item.title) || /\b(?:ova|ona|special)\b/i.test(item.url);
 
     if (isMovie && !isItemMovie) {
-      maxScoreForItem *= 0.5;
+      total *= 0.5;
     } else if (!isMovie && isItemMovie) {
-      maxScoreForItem *= 0.6;
+      total *= 0.6;
     } else if (!isMovie && isItemOva) {
-      maxScoreForItem *= 0.7;
+      total *= 0.8;
     }
 
-    if (maxScoreForItem > highestScore) {
-      highestScore = maxScoreForItem;
+    const label = parseSeasonLabel(`${item.title} ${item.jpTitle || ""}`);
+    const isPrimary = isMovie ? isItemMovie : (!label.isSpecial && !isItemMovie);
+
+    if (total > highestScore) {
+      highestScore = total;
       bestCandidate = item;
     }
+    if (isPrimary && total > highestPrimaryScore) {
+      highestPrimaryScore = total;
+      bestPrimary = item;
+    }
   }
 
-  if (highestScore < 0.35) {
-    return null;
+  if (highestPrimaryScore >= 0.45) {
+    return bestPrimary;
+  }
+  if (highestScore >= 0.45) {
+    return bestCandidate;
   }
 
-  return bestCandidate;
+  return null;
 }

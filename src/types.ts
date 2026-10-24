@@ -28,6 +28,7 @@ export interface PluginRuntimeResult {
 export interface TMDBSeasonInfo {
   season_number: number;
   name: string;
+  episode_count?: number;
 }
 
 export interface TMDBMetadata {
@@ -40,6 +41,9 @@ export interface TMDBMetadata {
   seasonName?: string;
   allSeasons?: TMDBSeasonInfo[];
   absoluteOffset: number;
+  totalEpisodes?: number;
+  seasonEpisodeCount?: number;
+  resolvedSeason?: number;
 }
 
 export interface AnikotoSearchResult {

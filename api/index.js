@@ -5,7 +5,8 @@ let PORT = parseInt(process.env.PORT || "7070", 10);
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const BASE_URL = "https://anikoto.cz";
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "439c478a771f35c05022f9feabcca01c";
-const { extractSeasonNumber, normalizeSubtitleLang } = require("../providers/anikoto.js");
+const { normalizeSubtitleLang, decodeHtmlEntities } = require("../providers/anikoto.js");
+const { parseEpisodes, pickBestTmdbResult, buildVideos } = require("../addon/videoMapper.js");
 
 // In-memory caches
 const cache = new Map();
@@ -34,16 +35,6 @@ function getLocalIp() {
   return "127.0.0.1";
 }
 
-function decodeHtmlEntities(str) {
-  if (!str) return "";
-  return str
-    .replace(/&#039;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-}
-
 function parseStreamId(fullId) {
   const raw = String(fullId || "").trim();
   let season = 1;
@@ -58,10 +49,13 @@ function parseStreamId(fullId) {
   const baseId = parts[0];
 
   if (parts.length >= 3) {
-    season = parseInt(parts[1], 10) || 1;
-    episode = parseInt(parts[2], 10) || 1;
+    const parsedSeason = parseInt(parts[1], 10);
+    const parsedEpisode = parseInt(parts[2], 10);
+    season = Number.isNaN(parsedSeason) ? 1 : parsedSeason;
+    episode = Number.isNaN(parsedEpisode) ? 1 : parsedEpisode;
   } else if (parts.length === 2) {
-    episode = parseInt(parts[1], 10) || 1;
+    const parsedEpisode = parseInt(parts[1], 10);
+    episode = Number.isNaN(parsedEpisode) ? 1 : parsedEpisode;
   }
   return { raw, baseId, isAnikoto, isKitsu, isTmdb, season, episode };
 }
@@ -120,7 +114,8 @@ function parseCards(html, forceType = null) {
     const title = decodeHtmlEntities(m[5].replace(/<[^>]+>/g, "").trim());
     const poster = m[3];
     const watchUrl = m[2];
-    const isMovie = forceType === "movie" || /\bmovie\b/i.test(title) || /\/movie\b/i.test(watchUrl);
+    const typeLabel = (m[0].match(/<div class="right">([^<]+)<\/div>/i) || [])[1] || "";
+    const isMovie = forceType === "movie" || /movie/i.test(typeLabel) || /\bmovie\b/i.test(title) || /\/movie\b/i.test(watchUrl);
     const itemType = isMovie ? "movie" : "series";
 
     animeStore.set(id, { title, poster, watchUrl, isMovie });
@@ -170,10 +165,10 @@ async function fetchFilterMetas(pathAndQuery, forceType = null) {
   }
 }
 
-async function fetchAnimeMeta(animeId) {
+async function fetchAnimeMeta(animeId, requestedType = "series") {
   const cacheKey = "meta_" + animeId;
   const hit = getCached(cacheKey);
-  if (hit) return hit;
+  if (hit && !(requestedType === "movie" && hit.type !== "movie")) return hit;
   try {
     // 1. Check for franchise seasons/sequels first
     let seasonItems = [];
@@ -192,7 +187,7 @@ async function fetchAnimeMeta(animeId) {
     let stored = animeStore.get(animeId);
     let animeTitle = stored?.title;
     let animePoster = stored?.poster;
-    let isMovie = stored?.isMovie || false;
+    let isMovie = requestedType === "movie" || stored?.isMovie || false;
 
     if (!animeTitle) {
       try {
@@ -238,72 +233,9 @@ async function fetchAnimeMeta(animeId) {
       isMovie = true;
     }
 
-    // 3. Build videos: If franchise exists, bundle all seasons/sequels/movies
-    let videos = [];
-    if (seasonItems.length > 1) {
-      const seasonInfos = await Promise.all(seasonItems.map(async (m, i) => {
-        const active = !!m[1];
-        const url = m[2];
-        const name = decodeHtmlEntities(m[3].replace(/<[^>]+>/g, "").trim());
-
-        let targetId = animeId;
-        if (!active) {
-          try {
-            const pageRes = await fetch(url, { headers: { "User-Agent": UA } });
-            const pageHtml = await pageRes.text();
-            const idMatch = pageHtml.match(/data-id="(\d+)"/);
-            if (idMatch) targetId = idMatch[1];
-          } catch {}
-        }
-        return { seasonNumber: i + 1, active, name, targetId };
-      }));
-
-      const epLists = await Promise.all(seasonInfos.map(s => {
-        return fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(s.targetId), {
-          headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
-        }).then(r => r.json()).catch(() => ({ result: "" }));
-      }));
-
-      for (let i = 0; i < seasonInfos.length; i++) {
-        const s = seasonInfos[i];
-        const epHtml = epLists[i]?.result || "";
-        const matches = [...epHtml.matchAll(/<a[^>]+data-id="(\d+)"[^>]+data-num="(\d+)"[^>]+data-ids="([^"]+)"(?:[^>]*data-mal="(\d+)")?[^>]*>(?:<b>(\d+)<\/b>)?(?:\s*<span[^>]*class="d-title"[^>]*>([^<]*)<\/span>)?/gi)];
-        for (const m of matches) {
-          const epNum = parseInt(m[2], 10);
-          const epTitle = m[6] ? decodeHtmlEntities(m[6].trim()) : ("Episode " + m[2]);
-          const fullTitle = "[" + s.name + "] " + epTitle;
-          videos.push({
-            id: "anikoto:" + s.targetId + ":" + s.seasonNumber + ":" + m[2],
-            title: fullTitle,
-            season: s.seasonNumber,
-            episode: epNum,
-            thumbnail: animePoster
-          });
-        }
-      }
-    } else {
-      const epRes = await fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(animeId), {
-        headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
-      });
-      const epJson = await epRes.json();
-      const html = epJson.result || "";
-      const matches = [...html.matchAll(/<a[^>]+data-id="(\d+)"[^>]+data-num="(\d+)"[^>]+data-ids="([^"]+)"(?:[^>]*data-mal="(\d+)")?[^>]*>(?:<b>(\d+)<\/b>)?(?:\s*<span[^>]*class="d-title"[^>]*>([^<]*)<\/span>)?/gi)];
-      const sNum = extractSeasonNumber(animeTitle) || 1;
-      videos = matches.map(m => ({
-        id: "anikoto:" + animeId + ":" + sNum + ":" + m[2],
-        title: isMovie ? animeTitle : (m[6] ? decodeHtmlEntities(m[6].trim()) : ("Episode " + m[2])),
-        season: isMovie ? 1 : sNum,
-        episode: parseInt(m[2], 10),
-        thumbnail: animePoster
-      }));
-    }
-
-    // 4. Query TMDB for high-res poster, background, and overview
-    let banner;
-    let description = isMovie ? ("Watch " + animeTitle + " full movie on Anikoto.cz.") : ("Watch " + animeTitle + " on Anikoto.cz (" + videos.length + " episodes available).");
-    let genres = ["Animation", "Action", "Fantasy"];
-    let releaseInfo;
-    let imdbRating;
+    // 3. Query TMDB for metadata and season structure
+    let tmdbInfo = null;
+    let tmdbSeasons = [];
     const searchKind = isMovie ? "movie" : "tv";
 
     try {
@@ -318,21 +250,99 @@ async function fetchAnimeMeta(animeId) {
       });
       if (tmdbRes.ok) {
         const tmdbData = await tmdbRes.json();
-        const top = (tmdbData.results || []).find((x) => (x.genre_ids || []).includes(16));
+        const top = pickBestTmdbResult(tmdbData.results || [], animeTitle);
         if (top) {
-          if (top.poster_path) animePoster = "https://image.tmdb.org/t/p/w500" + top.poster_path;
-          if (top.backdrop_path) banner = "https://image.tmdb.org/t/p/original" + top.backdrop_path;
-          if (top.overview) description = top.overview;
-          const dateStr = top.first_air_date || top.release_date;
-          if (dateStr) releaseInfo = dateStr.slice(0, 4);
-          if (top.vote_average) imdbRating = String(top.vote_average.toFixed(1));
-          if (top.genre_ids && top.genre_ids.length > 0) {
-            const gList = top.genre_ids.map((id) => GENRE_MAP[id]).filter(Boolean);
-            if (gList.length > 0) genres = gList;
+          tmdbInfo = top;
+          if (!isMovie) {
+            try {
+              const detailRes = await fetch("https://api.themoviedb.org/3/tv/" + top.id + "?api_key=" + TMDB_API_KEY, {
+                headers: { "User-Agent": UA }
+              });
+              if (detailRes.ok) {
+                const detail = await detailRes.json();
+                tmdbSeasons = detail.seasons || [];
+              }
+            } catch {}
           }
         }
       }
     } catch {}
+
+    // 4. Enrich metadata
+    let banner;
+    let description = isMovie ? ("Watch " + animeTitle + " full movie on Anikoto.cz.") : ("Watch " + animeTitle + " on Anikoto.cz.");
+    let genres = ["Animation", "Action", "Fantasy"];
+    let releaseInfo;
+    let imdbRating;
+
+    if (tmdbInfo) {
+      if (tmdbInfo.poster_path) animePoster = "https://image.tmdb.org/t/p/w500" + tmdbInfo.poster_path;
+      if (tmdbInfo.backdrop_path) banner = "https://image.tmdb.org/t/p/original" + tmdbInfo.backdrop_path;
+      if (tmdbInfo.overview) description = tmdbInfo.overview;
+      const dateStr = tmdbInfo.first_air_date || tmdbInfo.release_date;
+      if (dateStr) releaseInfo = dateStr.slice(0, 4);
+      if (tmdbInfo.vote_average) imdbRating = String(tmdbInfo.vote_average.toFixed(1));
+      if (tmdbInfo.genre_ids && tmdbInfo.genre_ids.length > 0) {
+        const gList = tmdbInfo.genre_ids.map((id) => GENRE_MAP[id]).filter(Boolean);
+        if (gList.length > 0) genres = gList;
+      }
+    }
+
+    // 5. Build episode lists and videos
+    let seasonItemsForVideos = [];
+    let episodeLists = [];
+
+    if (isMovie) {
+      const epRes = await fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(animeId), {
+        headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+      });
+      const epJson = await epRes.json();
+      episodeLists = [parseEpisodes(epJson.result || "")];
+      seasonItemsForVideos = [{ name: animeTitle, active: true, targetId: animeId }];
+    } else if (seasonItems.length > 1) {
+      const seasonInfos = await Promise.all(seasonItems.map(async (m) => {
+        const active = !!m[1];
+        const url = m[2];
+        const name = decodeHtmlEntities(m[3].replace(/<[^>]+>/g, "").trim());
+
+        let targetId = animeId;
+        if (!active) {
+          try {
+            const pageRes = await fetch(url, { headers: { "User-Agent": UA } });
+            const pageHtml = await pageRes.text();
+            const idMatch = pageHtml.match(/data-id="(\d+)"/);
+            if (idMatch) targetId = idMatch[1];
+          } catch {}
+        }
+        return { active, name, targetId };
+      }));
+
+      const epLists = await Promise.all(seasonInfos.map(s => {
+        return fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(s.targetId), {
+          headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+        }).then(r => r.json()).catch(() => ({ result: "" }));
+      }));
+
+      seasonItemsForVideos = seasonInfos;
+      episodeLists = epLists.map(j => parseEpisodes(j?.result || ""));
+    } else {
+      const epRes = await fetch(BASE_URL + "/ajax/episode/list/" + encodeURIComponent(animeId), {
+        headers: { "User-Agent": UA, "Referer": BASE_URL + "/", "X-Requested-With": "XMLHttpRequest" }
+      });
+      const epJson = await epRes.json();
+      episodeLists = [parseEpisodes(epJson.result || "")];
+      seasonItemsForVideos = [{ name: animeTitle, active: true, targetId: animeId }];
+    }
+
+    const videos = buildVideos({
+      animeId,
+      animeTitle,
+      animePoster,
+      seasonItems: seasonItemsForVideos,
+      episodeLists,
+      tmdbSeasons,
+      isMovie
+    });
 
     const meta = {
       id: "anikoto:" + animeId,
@@ -357,10 +367,9 @@ const manifest = {
   id: "org.anikoto.nuvio.addon",
   name: "Anikoto All-in-One",
   description: "Complete live anime catalogue, movies, and direct 1080p streaming from Anikoto.cz",
-  version: "1.4.0",
+  version: "1.5.0",
   resources: ["catalog", "meta", "stream", "subtitles"],
   types: ["anime", "series", "movie", "tv"],
-  idPrefixes: [], // Empty array allows Nuvio to query this addon for ANY catalog (Kitsu, TMDB, Cinemeta, etc.)
   catalogs: [
     {
       type: "movie",
@@ -406,22 +415,11 @@ const manifest = {
       extra: [
         { name: "skip", isRequired: false }
       ]
-    },
-    {
-      type: "anime",
-      id: "anikoto_movies_anime",
-      name: "Anikoto - Anime Movies",
-      extra: [
-        { name: "genre", isRequired: false, options: ALL_GENRES },
-        { name: "search", isRequired: false },
-        { name: "skip", isRequired: false }
-      ]
     }
   ]
 };
 
 module.exports = async function(req, res) {
-  console.log([]  );
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -508,9 +506,15 @@ module.exports = async function(req, res) {
   // 3. Meta details
   if (pathname.startsWith("/meta/")) {
     const parts = pathname.replace(/^\/meta\//, "").replace(/\.json$/, "").split("/");
+    const requestedType = parts[0] || "series";
     const fullId = parts[1] || "";
+    if (!/^anikoto[:/]/.test(fullId)) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ meta: null }));
+      return;
+    }
     const animeId = fullId.replace(/^anikoto[:/]/, "").split(":")[0];
-    const meta = await fetchAnimeMeta(animeId);
+    const meta = await fetchAnimeMeta(animeId, requestedType);
     res.writeHead(200);
     res.end(JSON.stringify({ meta }));
     return;
